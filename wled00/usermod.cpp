@@ -66,7 +66,7 @@ if (samples_read > 0) {
   }
   mean = mean/BLOCK_SIZE/16384;
   if (mean != 0.0) {
-    Serial.println("Digital microphone is present.");
+    Serial.printf("Digital microphone is present (mean = %.3g).\n", mean);
     digitalMic = true;
   } else {
     Serial.println("Digital microphone is NOT present.");
