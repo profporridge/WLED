@@ -31,7 +31,7 @@
 #ifdef USERMOD_BME280
 #include "../usermods/BME280_v2/usermod_bme280.h"
 #endif
-#ifdef USERMOD_FOUR_LINE_DISLAY
+#ifdef USERMOD_FOUR_LINE_DISPLAY
 #include "../usermods/usermod_v2_four_line_display/usermod_v2_four_line_display.h"
 #endif
 #ifdef USERMOD_ROTARY_ENCODER_UI
@@ -40,7 +40,6 @@
 #ifdef USERMOD_AUTO_SAVE
 #include "../usermods/usermod_v2_auto_save/usermod_v2_auto_save.h"
 #endif
-
 #ifdef USERMOD_DHT
 #include "../usermods/DHT/usermod_dht.h"
 #endif
@@ -74,7 +73,7 @@ void registerUsermods()
   #ifdef USERMOD_MODE_SORT
     usermods.add(new ModeSortUsermod());
   #endif
-  #ifdef USERMOD_FOUR_LINE_DISLAY
+  #ifdef USERMOD_FOUR_LINE_DISPLAY
     usermods.add(new FourLineDisplayUsermod());
   #endif
   #ifdef USERMOD_ROTARY_ENCODER_UI

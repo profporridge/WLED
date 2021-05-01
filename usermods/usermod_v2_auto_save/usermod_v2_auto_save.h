@@ -58,7 +58,7 @@ class AutoSaveUsermod : public Usermod {
     uint8_t knownMode = 0;
     uint8_t knownPalette = 0;
 
-#ifdef USERMOD_FOUR_LINE_DISLAY
+#ifdef USERMOD_FOUR_LINE_DISPLAY
     FourLineDisplayUsermod* display;
 #endif
 
@@ -66,7 +66,7 @@ class AutoSaveUsermod : public Usermod {
     // gets called once at boot. Do all initialization that doesn't depend on
     // network here
     void setup() {
-#ifdef USERMOD_FOUR_LINE_DISLAY    
+#ifdef USERMOD_FOUR_LINE_DISPLAY    
     // This Usermod has enhanced funcionality if
     // FourLineDisplayUsermod is available.
     display = (FourLineDisplayUsermod*) usermods.lookup(USERMOD_ID_FOUR_LINE_DISP);
@@ -131,7 +131,7 @@ class AutoSaveUsermod : public Usermod {
     }
 
     void displayOverlay() {
-#ifdef USERMOD_FOUR_LINE_DISLAY
+#ifdef USERMOD_FOUR_LINE_DISPLAY
       if (display != nullptr) {
         display->wakeDisplay();
         display->overlay("Settings", "Auto Saved", 1500);
