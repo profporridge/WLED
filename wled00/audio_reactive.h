@@ -17,6 +17,9 @@
 
 #include "wled.h"
 #include <driver/i2s.h>
+#include "audio_source.h"
+
+AudioSource *audioSource;
 
 // ALL AUDIO INPUT PINS DEFINED IN wled.h AND CONFIGURABLE VIA UI
 
@@ -39,10 +42,7 @@
 
 const i2s_port_t I2S_PORT = I2S_NUM_0;
 const int BLOCK_SIZE = 64;
-
 const int SAMPLE_RATE = 10240;                  // Base sample rate in Hz
-
-TaskHandle_t FFT_Task;
 
 //Use userVar0 and userVar1 (API calls &U0=,&U1=, uint16_t)
 
@@ -267,7 +267,7 @@ double fftAdd( int from, int to) {
 
 // FFT main code
 void FFTcode( void * parameter) {
-  //DEBUG_PRINT("FFT running on core: "); DEBUG_PRINTLN(xPortGetCoreID());
+  DEBUG_PRINT("FFT running on core: "); DEBUG_PRINTLN(xPortGetCoreID());
   //double beatSample = 0;  // COMMENTED OUT - UNUSED VARIABLE COMPILER WARNINGS
   //double envelope = 0;    // COMMENTED OUT - UNUSED VARIABLE COMPILER WARNINGS
 
@@ -278,36 +278,16 @@ void FFTcode( void * parameter) {
     // Only run the FFT computing code if we're not in Receive mode
     if (audioSyncEnabled & (1 << 1))
       continue;
+    audioSource->getSamples(vReal, samples);
 
-    microseconds = micros();
-    //extern double volume;   // COMMENTED OUT - UNUSED VARIABLE COMPILER WARNINGS
+    // Last sample in vReal is our current mic sample
+    micDataSm = (uint16_t)vReal[samples - 1];
 
-    for(int i=0; i<samples; i++) {
-      if (digitalMic == false) {
-        micData = analogRead(audioPin);           // Analog Read
-      } else {
-        int32_t digitalSample = 0;
-        // TODO: I2S_POP_SAMLE DEPRECATED, FIND ALTERNATE SOLUTION
-        int bytes_read = i2s_pop_sample(I2S_PORT, (char *)&digitalSample, portMAX_DELAY); // no timeout
-        if (bytes_read > 0) {
-          micData = abs(digitalSample >> 16);
-        }
-      }
-      micDataSm = ((micData * 3) + micData)/4;    // We'll be passing smoothed micData to the volume routines as the A/D is a bit twitchy.
-      vReal[i] = micData;                         // Store Mic Data in an array
+    // micDataSm = ((micData * 3) + micData)/4;
+
+    for (int i=0; i < samples; i++)
+    {
       vImag[i] = 0;
-
-      // MIC DATA DEBUGGING
-      // DEBUGSR_PRINT("micData: ");
-      // DEBUGSR_PRINT(micData);
-      // DEBUGSR_PRINT("\tmicDataSm: ");
-      // DEBUGSR_PRINT("\t");
-      // DEBUGSR_PRINT(micDataSm);
-      // DEBUGSR_PRINT("\n");
-
-      if (digitalMic == false) { while(micros() - microseconds < sampling_period_us){/*empty loop*/} }
-
-      microseconds += sampling_period_us;
     }
 
     FFT.Windowing( FFT_WIN_TYP_HAMMING, FFT_FORWARD );      // Weigh data
