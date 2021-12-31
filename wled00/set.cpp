@@ -95,6 +95,11 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     uint8_t pins[5] = {255, 255, 255, 255, 255};
 
     autoSegments = request->hasArg(F("MS"));
+    correctWB = request->hasArg(F("CCT"));
+    cctFromRgb = request->hasArg(F("CR"));
+		strip.cctBlending = request->arg(F("CB")).toInt();
+		Bus::setCCTBlend(strip.cctBlending);
+		Bus::setAutoWhiteMode(request->arg(F("AW")).toInt());
 
     for (uint8_t s = 0; s < WLED_MAX_BUSSES; s++) {
       char lp[4] = "L0"; lp[2] = 48+s; lp[3] = 0; //ascii 0-9 //strip data pin
@@ -116,7 +121,6 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       type = request->arg(lt).toInt();
       type |= request->hasArg(rf) << 7; // off refresh override
       skip = request->hasArg(sl) ? LED_SKIP_AMOUNT : 0;
-
       colorOrder = request->arg(co).toInt();
       start = (request->hasArg(ls)) ? request->arg(ls).toInt() : t;
       if (request->hasArg(lc) && request->arg(lc).toInt() > 0) {
@@ -149,8 +153,8 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     rlyMde = (bool)request->hasArg(F("RM"));
 
     for (uint8_t i=0; i<WLED_MAX_BUTTONS; i++) {
-      char bt[4] = "BT"; bt[2] = 48+i; bt[3] = 0; // button pin
-      char be[4] = "BE"; be[2] = 48+i; be[3] = 0; // button type
+      char bt[4] = "BT"; bt[2] = (i<10?48:55)+i; bt[3] = 0; // button pin (use A,B,C,... if WLED_MAX_BUTTONS>10)
+      char be[4] = "BE"; be[2] = (i<10?48:55)+i; be[3] = 0; // button type (use A,B,C,... if WLED_MAX_BUTTONS>10)
       int hw_btn_pin = request->arg(bt).toInt();
       if (pinManager.allocatePin(hw_btn_pin,false,PinOwner::Button)) {
         btnPin[i] = hw_btn_pin;
@@ -165,8 +169,6 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
 
     strip.ablMilliampsMax = request->arg(F("MA")).toInt();
     strip.milliampsPerLed = request->arg(F("LA")).toInt();
-    strip.rgbwMode = request->arg(F("AW")).toInt();
-
     briS = request->arg(F("CA")).toInt();
 
     turnOnAtBoot = request->hasArg(F("BO"));
@@ -377,9 +379,9 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     macroCountdown = request->arg(F("MC")).toInt();
     macroNl = request->arg(F("MN")).toInt();
     for (uint8_t i=0; i<WLED_MAX_BUTTONS; i++) {
-      char mp[4] = "MP"; mp[2] = 48+i; mp[3] = 0; // short
-      char ml[4] = "ML"; ml[2] = 48+i; ml[3] = 0; // long
-      char md[4] = "MD"; md[2] = 48+i; md[3] = 0; // double
+      char mp[4] = "MP"; mp[2] = (i<10?48:55)+i; mp[3] = 0; // short
+      char ml[4] = "ML"; ml[2] = (i<10?48:55)+i; ml[3] = 0; // long
+      char md[4] = "MD"; md[2] = (i<10?48:55)+i; md[3] = 0; // double
       //if (!request->hasArg(mp)) break;
       macroButton[i] = request->arg(mp).toInt();      // these will default to 0 if not present
       macroLongPress[i] = request->arg(ml).toInt();
@@ -469,7 +471,12 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
   //USERMODS
   if (subPage == 8)
   {
+    #ifdef WLED_USE_DYNAMIC_JSON
     DynamicJsonDocument doc(JSON_BUFFER_SIZE);
+    #else
+    if (!requestJSONBufferLock(5)) return;
+    #endif
+
     JsonObject um = doc.createNestedObject("um");
 
     size_t args = request->args();
@@ -542,6 +549,8 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       }
     }
     usermods.readFromConfig(um);  // force change of usermod parameters
+
+    releaseJSONBufferLock();
   }
 
   //SOUND SETTINGS
@@ -563,40 +572,28 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     t = request->hasArg(F("AGC"));
     if (t >=0) soundAgc = t;
 
-    // Analog mic pin
-    int hw_amic_pin = request->arg(F("SI")).toInt();
-    if (pinManager.allocatePin(hw_amic_pin,false, PinOwner::AnalogMic)) {
-      audioPin = hw_amic_pin;
-    } else {
-      audioPin = audioPin;
-    }
-    // Digital mic mode
-    uint8_t newDMEnabled = request->arg(F("DMM")).toInt();
-    // If the mic type was changed, tell the user to reset the board!
-    if (dmEnabled != newDMEnabled) {
-      serveMessage(request, 200,F("Settings saved..."),F("Please reset the board for changes to take effect!"), 10);
-      dmEnabled = newDMEnabled;
-    }
+
+    t = request->arg(F("SI")).toInt();
+    if (t >= 0 && t <=39) audioPin = t;
+
     // Digital Mic I2S SD pin
-    int hw_i2ssd_pin = request->arg(F("DI")).toInt();
-    if (pinManager.allocatePin(hw_i2ssd_pin,false, PinOwner::DigitalMic)) {
-      i2ssdPin = hw_i2ssd_pin;
-    } else {
-      i2ssdPin = i2ssdPin;
-    }
+    t = request->arg(F("DI")).toInt();
+    if (t >= 0 && t <=39) i2ssdPin = t;
+
     // Digital Mic I2S WS pin
-    int hw_i2sws_pin = request->arg(F("LR")).toInt();
-    if (pinManager.allocatePin(hw_i2sws_pin,false, PinOwner::DigitalMic)) {
-      i2swsPin = hw_i2sws_pin;
-    } else {
-      i2swsPin = i2swsPin;
-    }
+    t = request->arg(F("LR")).toInt();
+    if (t >= 0 && t <=39) i2swsPin = t;
+
     // Digital Mic I2S SCK pin
-    int hw_i2sck_pin = request->arg(F("CK")).toInt();
-    if (pinManager.allocatePin(hw_i2sck_pin,false, PinOwner::DigitalMic)) {
-      i2sckPin = hw_i2sck_pin;
-    } else {
-      i2sckPin = i2sckPin;
+    t = request->arg(F("CK")).toInt();
+    if (t >= -1 && t <=39) i2sckPin = t;
+
+    // Digital mic mode
+    uint8_t newDmType = request->arg(F("DMM")).toInt();
+    // If the mic type was changed, tell the user to reset the board!
+    if (dmType != newDmType) {
+      serveMessage(request, 200,F("Settings saved..."),F("Please reset the board for changes to take effect!"), 10);
+      dmType = newDmType;
     }
   }
 
@@ -613,20 +610,21 @@ int getNumVal(const String* req, uint16_t pos)
 }
 
 
-//helper to get int value at a position in string
-bool updateVal(const String* req, const char* key, byte* val, byte minv, byte maxv)
+//helper to get int value with in/decrementing support via ~ syntax
+void parseNumber(const char* str, byte* val, byte minv, byte maxv)
 {
-  int pos = req->indexOf(key);
-  if (pos < 1) return false;
-
-  if (req->charAt(pos+3) == '~') {
-    int out = getNumVal(req, pos+1);
+  if (str == nullptr || str[0] == '\0') return;
+  if (str[0] == 'r') {*val = random8(minv,maxv); return;}
+  if (str[0] == '~') {
+    int out = atoi(str +1);
     if (out == 0)
     {
-      if (req->charAt(pos+4) == '-') {
-        *val = (int)(*val -1) < (int)minv ? maxv : min((int)maxv,(*val -1));
+      if (str[1] == '0') return;
+      if (str[1] == '-')
+      {
+        *val = (int)(*val -1) < (int)minv ? maxv : min((int)maxv,(*val -1)); //-1, wrap around
       } else {
-        *val = (int)(*val +1) > (int)maxv ? minv : max((int)minv,(*val +1));
+        *val = (int)(*val +1) > (int)maxv ? minv : max((int)minv,(*val +1)); //+1, wrap around
       }
     } else {
       out += *val;
@@ -636,8 +634,26 @@ bool updateVal(const String* req, const char* key, byte* val, byte minv, byte ma
     }
   } else
   {
-    *val = getNumVal(req, pos);
+    byte p1 = atoi(str);
+    const char* str2 = strchr(str,'~'); //min/max range (for preset cycle, e.g. "1~5~")
+    if (str2) {
+      byte p2 = atoi(str2+1);
+      presetCycMin = p1; presetCycMax = p2;
+      while (isdigit((str2+1)[0])) str2++;
+      parseNumber(str2+1, val, p1, p2);
+    } else {
+      *val = p1;
+    }
   }
+}
+
+
+bool updateVal(const String* req, const char* key, byte* val, byte minv, byte maxv)
+{
+  int pos = req->indexOf(key);
+  if (pos < 1) return false;
+  if (req->length() < (unsigned int)(pos + 4)) return false;
+  parseNumber(req->c_str() + pos +3, val, minv, maxv);
   return true;
 }
 
@@ -731,17 +747,15 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
   pos = req.indexOf(F("PS=")); //saves current in preset
   if (pos > 0) savePreset(getNumVal(&req, pos));
 
-  byte presetCycleMin = 1;
-  byte presetCycleMax = 5;
-
   pos = req.indexOf(F("P1=")); //sets first preset for cycle
-  if (pos > 0) presetCycleMin = getNumVal(&req, pos);
+  if (pos > 0) presetCycMin = getNumVal(&req, pos);
 
   pos = req.indexOf(F("P2=")); //sets last preset for cycle
-  if (pos > 0) presetCycleMax = getNumVal(&req, pos);
+  if (pos > 0) presetCycMax = getNumVal(&req, pos);
 
   //apply preset
-  if (updateVal(&req, "PL=", &presetCycCurr, presetCycleMin, presetCycleMax)) {
+  if (updateVal(&req, "PL=", &presetCycCurr, presetCycMin, presetCycMax)) {
+		unloadPlaylist();
     applyPreset(presetCycCurr);
   }
 
@@ -751,9 +765,9 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
   byte prevEffect = effectCurrent;
   byte prevSpeed = effectSpeed;
   byte prevIntensity = effectIntensity;
-  byte prevFFT1 = effectFFT1;
-  byte prevFFT2 = effectFFT2;
-  byte prevFFT3 = effectFFT3;
+  byte prevCustom1 = effectCustom1;
+  byte prevCustom2 = effectCustom2;
+  byte prevCustom3 = effectCustom3;
   byte prevPalette = effectPalette;
 
   //set brightness
@@ -850,9 +864,9 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
   if (updateVal(&req, "FX=", &effectCurrent, 0, strip.getModeCount()-1) && request != nullptr) unloadPlaylist();  //unload playlist if changing FX using web request
   updateVal(&req, "SX=", &effectSpeed);
   updateVal(&req, "IX=", &effectIntensity);
-  updateVal(&req, "F1=", &effectFFT1);
-  updateVal(&req, "F2=", &effectFFT2);
-  updateVal(&req, "F3=", &effectFFT3);
+  updateVal(&req, "C1=", &effectCustom1);
+  updateVal(&req, "C2=", &effectCustom2);
+  updateVal(&req, "C3=", &effectCustom3);
   updateVal(&req, "FP=", &effectPalette, 0, strip.getPaletteCount()-1);
 
   //set advanced overlay
@@ -1030,16 +1044,16 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
       seg.intensity = effectIntensity;
       effectChanged = true;
     }
-    if (effectFFT1 != prevFFT1) {
-      seg.fft1 = effectFFT1;
+    if (effectCustom1 != prevCustom1) {
+      seg.custom1 = effectCustom1;
       effectChanged = true;
     }
-    if (effectFFT2 != prevFFT2) {
-      seg.fft2 = effectFFT2;
+    if (effectCustom2 != prevCustom2) {
+      seg.custom2 = effectCustom2;
       effectChanged = true;
     }
-    if (effectFFT3 != prevFFT3) {
-      seg.fft3 = effectFFT3;
+    if (effectCustom3 != prevCustom3) {
+      seg.custom3 = effectCustom3;
       effectChanged = true;
     }
     if (effectPalette != prevPalette) {

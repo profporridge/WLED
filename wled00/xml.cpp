@@ -54,11 +54,11 @@ void XML_response(AsyncWebServerRequest *request, char* dest)
   oappend(SET_F("</sx><ix>"));
   oappendi(effectIntensity);
   oappend(SET_F("</ix><f1>"));
-  oappendi(effectFFT1);
+  oappendi(effectCustom1);
   oappend(SET_F("</f1><f2>"));
-  oappendi(effectFFT2);
+  oappendi(effectCustom2);
   oappend(SET_F("</f2><f3>"));
-  oappendi(effectFFT3);
+  oappendi(effectCustom3);
   oappend(SET_F("</f3><fp>"));
   oappendi(effectPalette);
   oappend(SET_F("</fp><wv>"));
@@ -118,12 +118,12 @@ void URL_response(AsyncWebServerRequest *request)
   oappendi(effectSpeed);
   oappend(SET_F("&IX="));
   oappendi(effectIntensity);
-  oappend(SET_F("&F1="));
-  oappendi(effectFFT1);
-  oappend(SET_F("&F2="));
-  oappendi(effectFFT2);
-  oappend(SET_F("&F3="));
-  oappendi(effectFFT3);
+  oappend(SET_F("&C1="));
+  oappendi(effectCustom1);
+  oappend(SET_F("&C2="));
+  oappendi(effectCustom2);
+  oappend(SET_F("&C3="));
+  oappendi(effectCustom3);
   oappend(SET_F("&FP="));
   oappendi(effectPalette);
 
@@ -332,13 +332,22 @@ void getSettingsJS(byte subPage, char* dest)
   {
     char nS[8];
 
+    // Pin reservations will become unnecessary when settings pages will read cfg.json directly
     // add reserved and usermod pins as d.um_p array
     oappend(SET_F("d.um_p=[6,7,8,9,10,11"));
 
-    DynamicJsonDocument doc(JSON_BUFFER_SIZE/2);
+    { // scope so buffer can be released earlier
+    #ifdef WLED_USE_DYNAMIC_JSON
+    DynamicJsonDocument doc(3072);
+    #else
+    if (!requestJSONBufferLock(6)) return;
+    #endif
+
     JsonObject mods = doc.createNestedObject(F("um"));
     usermods.addToConfig(mods);
     if (!mods.isNull()) fillUMPins(mods);
+    releaseJSONBufferLock();
+    }
 
     #ifdef WLED_ENABLE_DMX
       oappend(SET_F(",2")); // DMX hardcoded pin
@@ -386,6 +395,10 @@ void getSettingsJS(byte subPage, char* dest)
     oappend(SET_F(");"));
 
     sappend('c',SET_F("MS"),autoSegments);
+    sappend('c',SET_F("CCT"),correctWB);
+    sappend('c',SET_F("CR"),cctFromRgb);
+		sappend('v',SET_F("CB"),strip.cctBlending);
+		sappend('v',SET_F("AW"),Bus::getAutoWhiteMode());
     sappend('v',SET_F("SOMP"),strip.stripOrMatrixPanel);
     sappend('v',SET_F("MXW"),strip.matrixWidth);
     sappend('v',SET_F("MXH"),strip.matrixHeight);
@@ -400,6 +413,7 @@ void getSettingsJS(byte subPage, char* dest)
 
     for (uint8_t s=0; s < busses.getNumBusses(); s++) {
       Bus* bus = busses.getBus(s);
+      if (bus == nullptr) continue;
       char lp[4] = "L0"; lp[2] = 48+s; lp[3] = 0; //ascii 0-9 //strip data pin
       char lc[4] = "LC"; lc[2] = 48+s; lc[3] = 0; //strip length
       char co[4] = "CO"; co[2] = 48+s; co[3] = 0; //strip color order
@@ -434,7 +448,6 @@ void getSettingsJS(byte subPage, char* dest)
     }
 
     sappend('v',SET_F("CA"),briS);
-    sappend('v',SET_F("AW"),strip.rgbwMode);
 
     sappend('c',SET_F("BO"),turnOnAtBoot);
     sappend('v',SET_F("BP"),bootPreset);
@@ -693,7 +706,7 @@ void getSettingsJS(byte subPage, char* dest)
     sappend('v',SET_F("GN"),sampleGain);
     sappend('c',SET_F("AGC"),soundAgc);
     sappend('v',SET_F("SI"),audioPin);
-    sappend('i',SET_F("DMM"),dmEnabled);
+    sappend('i',SET_F("DMM"),dmType);
     sappend('v',SET_F("DI"),i2ssdPin);
     sappend('v',SET_F("LR"),i2swsPin);
     sappend('v',SET_F("CK"),i2sckPin);

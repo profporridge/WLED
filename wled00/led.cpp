@@ -11,9 +11,9 @@ void setValuesFromMainSeg()
   effectCurrent = seg.mode;
   effectSpeed = seg.speed;
   effectIntensity = seg.intensity;
-  effectFFT1 = seg.fft1;
-  effectFFT2 = seg.fft2;
-  effectFFT3 = seg.fft3;
+  effectCustom1 = seg.custom1;
+  effectCustom2 = seg.custom2;
+  effectCustom3 = seg.custom3;
   effectPalette = seg.palette;
 }
 
@@ -33,7 +33,6 @@ void toggleOnOff()
   {
     briLast = bri;
     bri = 0;
-    unloadPlaylist();
   }
 }
 
@@ -41,25 +40,15 @@ void toggleOnOff()
 //scales the brightness with the briMultiplier factor
 byte scaledBri(byte in)
 {
-  uint32_t d = in*briMultiplier;
-  uint32_t val = d/100;
+  uint16_t val = ((uint16_t)in*briMultiplier)/100;
   if (val > 255) val = 255;
   return (byte)val;
 }
 
 
 void setAllLeds() {
-  if (strip.isRgbw && strip.rgbwMode == RGBW_MODE_LEGACY)
-  {
-    colorRGBtoRGBW(col);
-    colorRGBtoRGBW(colSec);
-  }
   strip.setColor(0, col[0], col[1], col[2], col[3]);
   strip.setColor(1, colSec[0], colSec[1], colSec[2], colSec[3]);
-  if (strip.isRgbw && strip.rgbwMode == RGBW_MODE_LEGACY)
-  {
-    col[3] = 0; colSec[3] = 0;
-  }
   if (!realtimeMode || !arlsForceMaxBri)
   {
     strip.setBrightness(scaledBri(briT));
@@ -90,10 +79,11 @@ bool colorChanged()
 void colorUpdated(int callMode)
 {
   //call for notifier -> 0: init 1: direct change 2: button 3: notification 4: nightlight 5: other (No notification)
-  //                     6: fx changed 7: hue 8: preset cycle 9: blynk 10: alexa
+  //                     6: fx changed 7: hue 8: preset cycle 9: blynk 10: alexa 11: ws send only 12: button preset
   if (callMode != CALL_MODE_INIT &&
       callMode != CALL_MODE_DIRECT_CHANGE &&
-      callMode != CALL_MODE_NO_NOTIFY) strip.applyToAllSelected = true; //if not from JSON api, which directly sets segments
+      callMode != CALL_MODE_NO_NOTIFY &&
+			callMode != CALL_MODE_BUTTON_PRESET) strip.applyToAllSelected = true; //if not from JSON api, which directly sets segments
 
   bool someSel = false;
 
@@ -104,7 +94,7 @@ void colorUpdated(int callMode)
   //Notifier: apply received FX to selected segments only if actually receiving FX
   if (someSel) strip.applyToAllSelected = receiveNotificationEffects;
 
-  bool fxChanged = strip.setEffectConfig(effectCurrent, effectSpeed, effectIntensity, effectFFT1, effectFFT2, effectFFT3, effectPalette) || effectChanged;
+  bool fxChanged = strip.setEffectConfig(effectCurrent, effectSpeed, effectIntensity, effectCustom1, effectCustom2, effectCustom3, effectPalette) || effectChanged;
   bool colChanged = colorChanged();
 
   //Notifier: apply received color to selected segments only if actually receiving color
@@ -193,8 +183,10 @@ void updateInterfaces(uint8_t callMode)
     espalexaDevice->setColor(col[0], col[1], col[2]);
   }
   #endif
+  #ifndef WLED_DISABLE_BLYNK
   if (callMode != CALL_MODE_BLYNK &&
       callMode != CALL_MODE_NO_NOTIFY) updateBlynk();
+  #endif
   doPublishMqtt = true;
   lastInterfaceUpdate = millis();
 }
@@ -288,7 +280,9 @@ void handleNightlight()
           setLedsStandard();
         }
       }
+      #ifndef WLED_DISABLE_BLYNK
       updateBlynk();
+      #endif
       if (macroNl > 0)
         applyPreset(macroNl);
       nightlightActiveOld = false;
