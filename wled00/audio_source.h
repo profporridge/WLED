@@ -1,12 +1,24 @@
 #pragma once
 
 #include <Wire.h>
-#include <wled.h>
+#include "wled.h"
 #include <driver/i2s.h>
 
 /* ToDo: remove. ES7243 is controlled via compiler defines
    Until this configuration is moved to the webinterface
 */
+
+// data type requested from the I2S driver - currently we always use 32bit
+//#define I2S_USE_16BIT_SAMPLES   // (experimental) define this to request 16bit - more efficient but possibly less compatible
+#ifdef I2S_USE_16BIT_SAMPLES
+#define I2S_SAMPLE_RESOLUTION I2S_BITS_PER_SAMPLE_16BIT
+#define I2S_datatype int16_t
+#undef  I2S_SAMPLE_DOWNSCALE_TO_16BIT
+#else
+#define I2S_SAMPLE_RESOLUTION I2S_BITS_PER_SAMPLE_32BIT
+#define I2S_datatype int32_t
+#define I2S_SAMPLE_DOWNSCALE_TO_16BIT
+#endif
 
 #ifndef MCLK_PIN
     int mclkPin = 0;
@@ -68,14 +80,14 @@ public:
 
 protected:
     // Private constructor, to make sure it is not callable except from derived classes
-    AudioSource(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) : _sampleRate(sampleRate), _blockSize(blockSize), _sampleNoDCOffset(0), _dcOffset(0.0f), _shift(lshift), _mask(mask), _initialized(false) {};
+    AudioSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) : _sampleRate(sampleRate), _blockSize(blockSize), _sampleNoDCOffset(0), _dcOffset(0.0f), _shift(lshift), _mask(mask), _initialized(false) {};
 
     int _sampleRate;                /* Microphone sampling rate */
     int _blockSize;                 /* I2S block size */
     volatile int _sampleNoDCOffset; /* Up-to-date sample without DCOffset */
     float _dcOffset;                /* Rolling average DC offset */
-    uint16_t _shift;                /* Shift obtained samples to the right by this amount */
-    uint32_t _mask;                 /* Bitmask for sample data after shifting */
+    int16_t _shift;                /* Shift obtained samples to the right (positive) or left(negative) by this amount */
+    uint32_t _mask;                 /* Bitmask for sample data after shifting. Bitmask 0X0FFF means that we need to convert 12bit ADC samples from unsigned to signed*/
     bool _initialized;              /* Gets set to true if initialization is successful */
 };
 
@@ -84,12 +96,12 @@ protected:
 */
 class I2SSource : public AudioSource {
 public:
-    I2SSource(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) :
+    I2SSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
         AudioSource(sampleRate, blockSize, lshift, mask) {
         _config = {
             .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
             .sample_rate = _sampleRate,
-            .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+            .bits_per_sample = I2S_SAMPLE_RESOLUTION,
             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
             .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
             .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
@@ -155,7 +167,7 @@ public:
         if(_initialized) {
             esp_err_t err;
             size_t bytes_read = 0;        /* Counter variable to check if we actually got enough data */
-            int32_t samples[num_samples]; /* Intermediary sample storage */
+            I2S_datatype samples[num_samples]; /* Intermediary sample storage */
 
             // Reset dc offset
             _dcOffset = 0.0f;
@@ -174,14 +186,31 @@ public:
 
             // Store samples in sample buffer and update DC offset
             for (int i = 0; i < num_samples; i++) {
+                // pre-shift samples down to 16bit
+#ifdef I2S_SAMPLE_DOWNSCALE_TO_16BIT
+                samples[i] >>= 16;
+#endif
+                // pre-processing of ADC samples
+                if (_mask == 0x0FFF) { // 0x0FFF means that we have 12bit unsigned data from ADC -> convert to signed
+                   samples[i] = samples[i] - 2048;
+                }
                 // From the old code.
-                double sample = (double)abs((samples[i] >> _shift));
+                // double sample = (double)abs((samples[i] >> _shift));
+                double sample = 0.0;
+                if(_shift > 0)
+                  sample = (double) (samples[i] >> _shift);
+                else {
+                  if(_shift < 0)
+                    sample = (double) (samples[i] << (- _shift)); // need to "pump up" 12bit ADC to full 16bit as delivered by other digital mics
+                  else
+                    sample = (double) samples[i];
+                }
                 buffer[i] = sample;
                 _dcOffset = ((_dcOffset * 31) + sample) / 32;
             }
 
             // Update no-DC sample
-            _sampleNoDCOffset = abs(buffer[num_samples - 1] - _dcOffset);
+            _sampleNoDCOffset = buffer[num_samples - 1] - _dcOffset;
         }
     }
 
@@ -200,7 +229,7 @@ protected:
 */
 class I2SSourceWithMasterClock : public I2SSource {
 public:
-    I2SSourceWithMasterClock(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) :
+    I2SSourceWithMasterClock(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
         I2SSource(sampleRate, blockSize, lshift, mask) {
     };
 
@@ -261,14 +290,14 @@ private:
         _es7243I2cWrite(0x00, 0x01);
         _es7243I2cWrite(0x06, 0x00);
         _es7243I2cWrite(0x05, 0x1B);
-        _es7243I2cWrite(0x01, 0x00); // 0x00 for 24 bit to match INMP441
+        _es7243I2cWrite(0x01, 0x00); // 0x00 for 24 bit to match INMP441 - not sure if this needs adjustment to get 16bit samples from I2S
         _es7243I2cWrite(0x08, 0x43);
         _es7243I2cWrite(0x05, 0x13);
     }
 
 public:
 
-    ES7243(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) :
+    ES7243(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
         I2SSourceWithMasterClock(sampleRate, blockSize, lshift, mask) {
         _config.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
     };
@@ -299,12 +328,12 @@ public:
 */
 class I2SAdcSource : public I2SSource {
 public:
-    I2SAdcSource(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) :
+    I2SAdcSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
         I2SSource(sampleRate, blockSize, lshift, mask){
         _config = {
             .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN),
             .sample_rate = _sampleRate,
-            .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+            .bits_per_sample = I2S_SAMPLE_RESOLUTION,
             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
             .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
             .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
@@ -339,7 +368,17 @@ public:
         if (err != ESP_OK) {
             Serial.printf("Failed to set i2s adc mode: %d\n", err);
             return;
+
         }
+#if defined(ARDUINO_ARCH_ESP32)
+        // according to docs from espressif, the ADC needs to be started explicitly
+        // fingers crossed
+        err = i2s_adc_enable(I2S_NUM_0);
+        if (err != ESP_OK) {
+            Serial.printf("Failed to enable i2s adc: %d\n", err);
+            //return;
+        }
+#endif
 
         _initialized = true;
     }
@@ -350,26 +389,43 @@ public:
     after sampling, otherwise Wifi dies
     */
         if (_initialized) {
+#if !defined(ARDUINO_ARCH_ESP32)
+			// old code - works for me without enable/disable, at least on ESP32.
             esp_err_t err = i2s_adc_enable(I2S_NUM_0);
+			//esp_err_t err = i2s_start(I2S_NUM_0);
             if (err != ESP_OK) {
                 Serial.printf("Failed to enable i2s adc: %d\n", err);
                 return;
             }
-
+#endif
             I2SSource::getSamples(buffer, num_samples);
 
+#if !defined(ARDUINO_ARCH_ESP32)
+			// old code - works for me without enable/disable, at least on ESP32.
             err = i2s_adc_disable(I2S_NUM_0);
+			//err = i2s_stop(I2S_NUM_0);
             if (err != ESP_OK) {
                 Serial.printf("Failed to disable i2s adc: %d\n", err);
                 return;
             }
+#endif
         }
     }
 
     void deinitialize() {
         pinManager.deallocatePin(audioPin, PinOwner::AnalogMic);
         _initialized = false;
-        esp_err_t err = i2s_driver_uninstall(I2S_NUM_0);
+        esp_err_t err;
+#if defined(ARDUINO_ARCH_ESP32)
+        // according to docs from espressif, the ADC needs to be stopped explicitly
+        // fingers crossed
+        err = i2s_adc_disable(I2S_NUM_0);
+        if (err != ESP_OK) {
+            Serial.printf("Failed to disable i2s adc: %d\n", err);
+            //return;
+        }
+#endif
+        err = i2s_driver_uninstall(I2S_NUM_0);
         if (err != ESP_OK) {
             Serial.printf("Failed to uninstall i2s driver: %d\n", err);
             return;
@@ -384,7 +440,7 @@ public:
 class SPH0654 : public I2SSource {
 
 public:
-    SPH0654(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) :
+    SPH0654(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
         I2SSource(sampleRate, blockSize, lshift, mask){}
 
     void initialize() {
@@ -403,7 +459,7 @@ public:
 class I2SPdmSource : public I2SSource {
 
 public:
-    I2SPdmSource(int sampleRate, int blockSize, uint16_t lshift, uint32_t mask) :
+    I2SPdmSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
         I2SSource(sampleRate, blockSize, lshift, mask) {
 
         _config.mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); // Change mode to pdm
