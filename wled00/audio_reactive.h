@@ -17,6 +17,11 @@
 
 #include "wled.h"
 #include <driver/i2s.h>
+#include "audio_source.h"
+
+AudioSource *audioSource;
+
+// ALL AUDIO INPUT PINS DEFINED IN wled.h AND CONFIGURABLE VIA UI
 
 // Comment/Uncomment to toggle usb serial debugging
 // #define SR_DEBUG
@@ -35,28 +40,13 @@
 // #define MIC_SAMPLING_LOG
 // #define FFT_SAMPLING_LOG
 
-// The following 3 defines are for Digital Microphone support
-#ifndef I2S_WS
-  #define I2S_WS 15        // aka LRCL
-#endif
-#ifndef I2S_SD
-  #define I2S_SD 32        // aka DOUT
-#endif
-#ifndef I2S_SCK
-  #define I2S_SCK 14       // aka BCLK
-#endif
+//#define MAJORPEAK_SUPPRESS_NOISE      // define to activate a dirty hack that ignores the lowest + hightest FFT bins
 
 const i2s_port_t I2S_PORT = I2S_NUM_0;
-const int BLOCK_SIZE = 64;
-
+const int BLOCK_SIZE = 128;
 const int SAMPLE_RATE = 10240;                  // Base sample rate in Hz
 
-TaskHandle_t FFT_Task;
-
 //Use userVar0 and userVar1 (API calls &U0=,&U1=, uint16_t)
-#ifndef MIC_PIN
-  #define MIC_PIN   36  // Changed to direct pin name - ESP32: 36(ADC1_0) Analog port for microphone
-#endif
 
 #ifndef LED_BUILTIN     // Set LED_BUILTIN if it is not defined by Arduino framework
   #define LED_BUILTIN 3
@@ -65,6 +55,7 @@ TaskHandle_t FFT_Task;
 #define UDP_SYNC_HEADER "00001"
 
 uint8_t maxVol = 10;                            // Reasonable value for constant volume for 'peak detector', as it won't always trigger
+uint8_t binNum;                                 // Used to select the bin for FFT based beat detection.
 uint8_t targetAgc = 60;                         // This is our setPoint at 20% of max for the adjusted output
 uint8_t myVals[32];                             // Used to store a pile of samples because WLED frame rate and WLED sample rate are not synchronized. Frame rate is too low.
 bool samplePeak = 0;                            // Boolean flag for peak. Responding routine must reset this flag
@@ -88,6 +79,34 @@ float expAdjF;                                  // Used for exponential filter.
 float weighting = 0.2;                          // Exponential filter weighting. Will be adjustable in a future release.
 
 
+// FFT Variables
+const uint16_t samples = 512;                   // This value MUST ALWAYS be a power of 2
+unsigned int sampling_period_us;
+unsigned long microseconds;
+
+double FFT_MajorPeak = 0;
+double FFT_Magnitude = 0;
+uint16_t mAvg = 0;
+
+// These are the input and output vectors.  Input vectors receive computed results from FFT.
+double vReal[samples];
+double vImag[samples];
+double fftBin[samples];
+
+// Try and normalize fftBin values to a max of 4096, so that 4096/16 = 256.
+// Oh, and bins 0,1,2 are no good, so we'll zero them out.
+double fftCalc[16];
+int fftResult[16];                              // Our calculated result table, which we feed to the animations.
+double fftResultMax[16];                        // A table used for testing to determine how our post-processing is working.
+float fftAvg[16];
+
+// Table of linearNoise results to be multiplied by soundSquelch in order to reduce squelch across fftResult bins.
+int linearNoise[16] = { 34, 28, 26, 25, 20, 12, 9, 6, 4, 4, 3, 2, 2, 2, 2, 2 };
+
+// Table of multiplication factors so that we can even out the frequency response.
+double fftResultPink[16] = {1.70,1.71,1.73,1.78,1.68,1.56,1.55,1.63,1.79,1.62,1.80,2.06,2.47,3.35,6.83,9.55};
+
+
 struct audioSyncPacket {
   char header[6] = UDP_SYNC_HEADER;
   uint8_t myVals[32];     //  32 Bytes
@@ -103,50 +122,60 @@ struct audioSyncPacket {
 double mapf(double x, double in_min, double in_max, double out_min, double out_max);
 
 bool isValidUdpSyncVersion(char header[6]) {
-  return (header == UDP_SYNC_HEADER);
+  if (strncmp(header, UDP_SYNC_HEADER, 6) == 0) {
+    return true;
+  } else {
+    return false;
+  }
 }
 
 void getSample() {
   static long peakTime;
-  extern double FFT_Magnitude;                    // Optional inclusion for our volume routines
-  extern double FFT_MajorPeak;                    // Same here. Not currently used though
+  //extern double FFT_Magnitude;                    // Optional inclusion for our volume routines // COMMENTED OUT - UNUSED VARIABLE COMPILER WARNINGS
+  //extern double FFT_MajorPeak;                    // Same here. Not currently used though       // COMMENTED OUT - UNUSED VARIABLE COMPILER WARNINGS
 
   #ifdef WLED_DISABLE_SOUND
     micIn = inoise8(millis(), millis());          // Simulated analog read
   #else
     micIn = micDataSm;      // micDataSm = ((micData * 3) + micData)/4;
-//////
+/*---------DEBUG---------*/
     DEBUGSR_PRINT("micIn:\tmicData:\tmicIn>>2:\tmic_In_abs:\tsample:\tsampleAdj:\tsampleAvg:\n");
     DEBUGSR_PRINT(micIn); DEBUGSR_PRINT("\t"); DEBUGSR_PRINT(micData);
-
-    if (digitalMic == false) micIn = micIn >> 2;  // ESP32 has 2 more bits of A/D than ESP8266, so we need to normalize to 10 bit.
-//////
+/*-------END DEBUG-------*/
+// We're still using 10 bit, but changing the analog read resolution in usermod.cpp
+//    if (digitalMic == false) micIn = micIn >> 2;  // ESP32 has 2 more bits of A/D than ESP8266, so we need to normalize to 10 bit.
+/*---------DEBUG---------*/
     DEBUGSR_PRINT("\t\t"); DEBUGSR_PRINT(micIn);
+/*-------END DEBUG-------*/
   #endif
   micLev = ((micLev * 31) + micIn) / 32;          // Smooth it out over the last 32 samples for automatic centering
   micIn -= micLev;                                // Let's center it to 0 now
-  micIn = abs(micIn);                             // And get the absolute value of each sample
-//////
+/*---------DEBUG---------*/
   DEBUGSR_PRINT("\t\t"); DEBUGSR_PRINT(micIn);
+/*-------END DEBUG-------*/
 
 // Using an exponential filter to smooth out the signal. We'll add controls for this in a future release.
   expAdjF = (weighting * micIn + (1.0-weighting) * expAdjF);
   expAdjF = (expAdjF <= soundSquelch) ? 0: expAdjF;
 
+  expAdjF = fabs(expAdjF);                          // Now (!) take the absolute value
   tmpSample = (int)expAdjF;
 
-//////
+/*---------DEBUG---------*/
   DEBUGSR_PRINT("\t\t"); DEBUGSR_PRINT(sample);
+/*-------END DEBUG-------*/
+  micIn = abs(micIn);                             // And get the absolute value of each sample
 
   sampleAdj = tmpSample * sampleGain / 40 + tmpSample / 16; // Adjust the gain.
-  sampleAdj = min(sampleAdj, 255);
+  sampleAdj = min(sampleAdj, 255);                // Question: why are we limiting the value to 8 bits ???
   sample = sampleAdj;                             // ONLY update sample ONCE!!!!
 
   sampleAvg = ((sampleAvg * 15) + sample) / 16;   // Smooth it out over the last 16 samples.
-//////
 
+/*---------DEBUG---------*/
   DEBUGSR_PRINT("\t"); DEBUGSR_PRINT(sample);
   DEBUGSR_PRINT("\t\t"); DEBUGSR_PRINT(sampleAvg); DEBUGSR_PRINT("\n\n");
+/*-------END DEBUG-------*/
 
   if (millis() - timeOfPeak > MIN_SHOW_DELAY) {   // Auto-reset of samplePeak after a complete frame has passed.
     samplePeak = 0;
@@ -155,8 +184,10 @@ void getSample() {
 
   if (userVar1 == 0) samplePeak = 0;
   // Poor man's beat detection by seeing if sample > Average + some value.
-  if (sample > (sampleAvg + maxVol) && millis() > (peakTime + 100)) {
-  // Then we got a peak, else we don't. Display routines need to reset the samplepeak value in case they miss the trigger.
+  //  Serial.print(binNum); Serial.print("\t"); Serial.print(fftBin[binNum]); Serial.print("\t"); Serial.print(fftAvg[binNum/16]); Serial.print("\t"); Serial.print(maxVol); Serial.print("\t"); Serial.println(samplePeak);
+  if ((fftBin[binNum] > maxVol) && (millis() > (peakTime + 100))) {                     // This goe through ALL of the 255 bins
+  //  if (sample > (sampleAvg + maxVol) && millis() > (peakTime + 200)) {
+  // Then we got a peak, else we don't. The peak has to time out on its own in order to support UDP sound sync.
     samplePeak = 1;
     timeOfPeak = millis();
     udpSamplePeak = 1;
@@ -168,11 +199,27 @@ void getSample() {
 /*
  * A simple averaging multiplier to automatically adjust sound sensitivity.
  */
+/*
+ * A simple, but hairy, averaging multiplier to automatically adjust sound sensitivity.
+ *    not sure if not sure "sample" or "sampleAvg" is the correct input signal for AGC
+ */
 void agcAvg() {
 
-  multAgc = (sampleAvg < 1) ? targetAgc : targetAgc / sampleAvg;  // Make the multiplier so that sampleAvg * multiplier = setpoint
-  int tmpAgc = sample * multAgc;
-  if (tmpAgc > 255) tmpAgc = 0;
+  float lastMultAgc = multAgc;
+  float tmpAgc;
+  if(fabs(sampleAvg) < 2.0) {
+    tmpAgc = sampleAvg;                           // signal below squelch -> deliver silence
+    multAgc = multAgc * 0.95;                     // slightly decrease gain multiplier
+  } else {
+    multAgc = (sampleAvg < 1) ? targetAgc : targetAgc / sampleAvg;  // Make the multiplier so that sampleAvg * multiplier = setpoint
+  }
+
+  if (multAgc < 0.5) multAgc = 0.5;               // signal higher than 2*setpoint -> don't reduce it further
+  multAgc = (lastMultAgc*127.0 +multAgc) / 128.0; //apply some filtering to gain multiplier -> smoother transitions
+  tmpAgc = (float)sample * multAgc;               // apply gain to signal
+  if (tmpAgc <= (soundSquelch*1.2)) tmpAgc = sample;  // check against squelch threshold - increased by 20% to avoid artefacts (ripples)
+
+  if (tmpAgc > 255) tmpAgc = 255;
   sampleAgc = tmpAgc;                             // ONLY update sampleAgc ONCE because it's used elsewhere asynchronously!!!!
   userVar0 = sampleAvg * 4;
   if (userVar0 > 255) userVar0 = 255;
@@ -222,30 +269,7 @@ void transmitAudioData() {
   return;
 } // transmitAudioData()
 
-const uint16_t samples = 512;                     // This value MUST ALWAYS be a power of 2
-unsigned int sampling_period_us;
-unsigned long microseconds;
 
-double FFT_MajorPeak = 0;
-double FFT_Magnitude = 0;
-uint16_t mAvg = 0;
-
-// These are the input and output vectors.  Input vectors receive computed results from FFT.
-double vReal[samples];
-double vImag[samples];
-double fftBin[samples];
-
-// Try and normalize fftBin values to a max of 4096, so that 4096/16 = 256.
-// Oh, and bins 0,1,2 are no good, so we'll zero them out.
-double fftCalc[16];
-int fftResult[16];                      // Our calculated result table, which we feed to the animations.
-double fftResultMax[16];                // A table used for testing to determine how our post-processing is working.
-
-// Table of linearNoise results to be multiplied by soundSquelch in order to reduce squelch across fftResult bins.
-int linearNoise[16] = { 34, 28, 26, 25, 20, 12, 9, 6, 4, 4, 3, 2, 2, 2, 2, 2 };
-
-// Table of multiplication factors so that we can even out the frequency response.
-double fftResultPink[16] = {1.70,1.71,1.73,1.78,1.68,1.56,1.55,1.63,1.79,1.62,1.80,2.06,2.47,3.35,6.83,9.55};
 
 
 // Create FFT object
@@ -262,9 +286,10 @@ double fftAdd( int from, int to) {
 
 // FFT main code
 void FFTcode( void * parameter) {
-  //DEBUG_PRINT("FFT running on core: "); DEBUG_PRINTLN(xPortGetCoreID());
-  double beatSample = 0;
-  double envelope = 0;
+  DEBUG_PRINT("FFT running on core: "); DEBUG_PRINTLN(xPortGetCoreID());
+#ifdef MAJORPEAK_SUPPRESS_NOISE
+  static double xtemp[24] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+#endif
 
   for(;;) {
     delay(1);           // DO NOT DELETE THIS LINE! It is needed to give the IDLE(0) task enough time and to keep the watchdog happy.
@@ -273,39 +298,32 @@ void FFTcode( void * parameter) {
     // Only run the FFT computing code if we're not in Receive mode
     if (audioSyncEnabled & (1 << 1))
       continue;
+    audioSource->getSamples(vReal, samples);
 
-    microseconds = micros();
-    extern double volume;
+    // old code - Last sample in vReal is our current mic sample
+    //micDataSm = (uint16_t)vReal[samples - 1]; // will do a this a bit later
 
-    for(int i=0; i<samples; i++) {
-      if (digitalMic == false) {
-        micData = analogRead(MIC_PIN);            // Analog Read
-      } else {
-        int32_t digitalSample = 0;
-        int bytes_read = i2s_pop_sample(I2S_PORT, (char *)&digitalSample, portMAX_DELAY); // no timeout
-        if (bytes_read > 0) {
-          micData = abs(digitalSample >> 16);
-        }
-      }
+    // micDataSm = ((micData * 3) + micData)/4;
 
-      micDataSm = ((micData * 3) + micData)/4;    // We'll be passing smoothed micData to the volume routines as the A/D is a bit twitchy.
-      vReal[i] = micData;                         // Store Mic Data in an array
+    double maxSample = 0.0;
+    for (int i=0; i < samples; i++)
+    {
+	    // set imaginary parts to 0
       vImag[i] = 0;
-
-      // MIC DATA DEBUGGING
-      // DEBUGSR_PRINT("micData: ");
-      // DEBUGSR_PRINT(micData);
-      // DEBUGSR_PRINT("\tmicDataSm: ");
-      // DEBUGSR_PRINT("\t");
-      // DEBUGSR_PRINT(micDataSm);
-      // DEBUGSR_PRINT("\n");
-
-      if (digitalMic == false) { while(micros() - microseconds < sampling_period_us){/*empty loop*/} }
-
-      microseconds += sampling_period_us;
+	    // pick our  our current mic sample - we take the max value from all samples that go into FFT 
+	    if ((vReal[i] <= (INT16_MAX - 1024)) && (vReal[i] >= (INT16_MIN + 1024)))  //skip extreme values - normally these are artefacts
+	    {
+		    if (fabs(vReal[i]) > maxSample) maxSample = fabs(vReal[i]);
+	    }
     }
+	  micDataSm = (uint16_t)maxSample;
 
-    FFT.Windowing( FFT_WIN_TYP_HAMMING, FFT_FORWARD );      // Weigh data
+    FFT.DCRemoval(); // let FFT lib remove DC component, so we don't need to care about this in getSamples()	
+
+    //FFT.Windowing( FFT_WIN_TYP_HAMMING, FFT_FORWARD );        // Weigh data - standard Hamming window
+    //FFT.Windowing( FFT_WIN_TYP_BLACKMAN, FFT_FORWARD );       // Blackman window - better side freq rejection
+    //FFT.Windowing( FFT_WIN_TYP_BLACKMAN_HARRIS, FFT_FORWARD );// Blackman-Harris - excellent sideband rejection
+    FFT.Windowing( FFT_WIN_TYP_FLT_TOP, FFT_FORWARD );         // Flat Top Window - better amplitude accuracy
     FFT.Compute( FFT_FORWARD );                             // Compute FFT
     FFT.ComplexToMagnitude();                               // Compute magnitudes
 
@@ -313,11 +331,70 @@ void FFTcode( void * parameter) {
     // vReal[3 .. 255] contain useful data, each a 20Hz interval (60Hz - 5120Hz).
     // There could be interesting data at bins 0 to 2, but there are too many artifacts.
     //
+#ifdef MAJORPEAK_SUPPRESS_NOISE
+    // teporarily reduce signal strength in the highest + lowest bins
+    xtemp[0] = vReal[0]; vReal[0] *= 0.005;
+    xtemp[1] = vReal[1]; vReal[1] *= 0.005;
+    xtemp[2] = vReal[2]; vReal[2] *= 0.005;
+    xtemp[3] = vReal[3]; vReal[3] *= 0.02;
+    xtemp[4] = vReal[4]; vReal[4] *= 0.02;
+    xtemp[5] = vReal[5]; vReal[5] *= 0.02;
+    xtemp[6] = vReal[6]; vReal[6] *= 0.05;
+    xtemp[7] = vReal[7]; vReal[7] *= 0.08;
+    xtemp[8] = vReal[8]; vReal[8] *= 0.1;
+    xtemp[9] = vReal[9]; vReal[9] *= 0.2;
+    xtemp[10] = vReal[10]; vReal[10] *= 0.2;
+    xtemp[11] = vReal[11]; vReal[11] *= 0.25;
+    xtemp[12] = vReal[12]; vReal[12] *= 0.3;
+    xtemp[13] = vReal[13]; vReal[13] *= 0.3;
+    xtemp[14] = vReal[14]; vReal[14] *= 0.4;
+    xtemp[15] = vReal[15]; vReal[15] *= 0.4;
+    xtemp[16] = vReal[16]; vReal[16] *= 0.4;
+    xtemp[17] = vReal[17]; vReal[17] *= 0.5;
+    xtemp[18] = vReal[18]; vReal[18] *= 0.5;
+    xtemp[19] = vReal[19]; vReal[19] *= 0.6;
+    xtemp[20] = vReal[20]; vReal[20] *= 0.7;
+    xtemp[21] = vReal[21]; vReal[21] *= 0.8;
+
+    xtemp[22] = vReal[samples-2]; vReal[samples-2] =0.0;
+    xtemp[23] = vReal[samples-1]; vReal[samples-1] =0.0;
+#endif
+
     FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);          // let the effects know which freq was most dominant
+
+#ifdef MAJORPEAK_SUPPRESS_NOISE
+	// dirty hack: limit suppressed channel intensities to FFT_Magnitude
+	for (int k=0; k < 24; k++) if(xtemp[k] > FFT_Magnitude) xtemp[k] = FFT_Magnitude;
+    // restore bins
+    vReal[0] = xtemp[0];
+    vReal[1] = xtemp[1];
+    vReal[2] = xtemp[2];
+    vReal[3] = xtemp[3];
+    vReal[4] = xtemp[4];
+    vReal[5] = xtemp[5];
+    vReal[6] = xtemp[6];
+    vReal[7] = xtemp[7];
+    vReal[8] = xtemp[8];
+    vReal[9] = xtemp[9];
+    vReal[10] = xtemp[10];
+    vReal[11] = xtemp[11];
+    vReal[12] = xtemp[12];
+    vReal[13] = xtemp[13];
+    vReal[14] = xtemp[14];
+    vReal[15] = xtemp[15];
+    vReal[16] = xtemp[16];
+    vReal[17] = xtemp[17];
+    vReal[18] = xtemp[18];
+    vReal[19] = xtemp[19];
+    vReal[20] = xtemp[20];
+    vReal[21] = xtemp[21];
+    vReal[samples-2] = xtemp[22];
+    vReal[samples-1] = xtemp[23];    
+#endif
 
     for (int i = 0; i < samples; i++) {                     // Values for bins 0 and 1 are WAY too large. Might as well start at 3.
       double t = 0.0;
-      t = abs(vReal[i]);
+      t = fabs(vReal[i]);                                   // just to be sure - values in fft bins should be positive any way
       t = t / 16.0;                                         // Reduce magnitude. Want end result to be linear and ~4096 max.
       fftBin[i] = t;
     } // for()
@@ -372,7 +449,8 @@ void FFTcode( void * parameter) {
 // Now, let's dump it all into fftResult. Need to do this, otherwise other routines might grab fftResult values prematurely.
     for (int i=0; i < 16; i++) {
         // fftResult[i] = (int)fftCalc[i];
-        fftResult[i] = constrain((int)fftCalc[i],0,254);
+        fftResult[i] = constrain((int)fftCalc[i],0,254);         // question: why do we constrain values to 8bit here ???
+        fftAvg[i] = (float)fftResult[i]*.05 + (1-.05)*fftAvg[i];
     }
 
 
@@ -391,12 +469,14 @@ void logAudio() {
 #ifdef MIC_LOGGER
 
 
-//  Serial.print(micIn);      Serial.print(" ");
-//  Serial.print(sample); Serial.print(" ");
-//  Serial.print(sampleAvg); Serial.print(" ");
-//  Serial.print(sampleAgc);  Serial.print(" ");
-//  Serial.print(micData);    Serial.print(" ");
-//  Serial.print(micDataSm);  Serial.print(" ");
+  //Serial.print("micData:");    Serial.print(micData);   Serial.print("\t");
+  //Serial.print("micDataSm:");  Serial.print(micDataSm); Serial.print("\t");
+  //Serial.print("micIn:");      Serial.print(micIn);     Serial.print("\t");
+  //Serial.print("micLev:");     Serial.print(micLev);      Serial.print("\t");
+  Serial.print("sample:");     Serial.print(sample);      Serial.print("\t");
+  //Serial.print("sampleAvg:");  Serial.print(sampleAvg);   Serial.print("\t");
+  //Serial.print("multAgc:");    Serial.print(multAgc);   Serial.print("\t");
+  Serial.print("sampleAgc:");  Serial.print(sampleAgc);   Serial.print("\t");
   Serial.println(" ");
 
 #endif
