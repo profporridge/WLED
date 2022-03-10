@@ -21,38 +21,38 @@ void userSetup() {
   periph_module_reset(PERIPH_I2S0_MODULE);
 
   delay(100);         // Give that poor microphone some time to setup.
-  switch (dmEnabled) {
+  switch (dmType) {
     case 1:
-      Serial.println("Attempting to configure generic I2S Microphone.");
-      audioSource = new I2SSource(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFFFFFFF);
+      Serial.println("AS: Generic I2S Microphone.");
+      audioSource = new I2SSource(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
       break;
     case 2:
-      Serial.println("Attempting to configure ES7243 Microphone.");
-      audioSource = new ES7243(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFFFFFFF);
+      Serial.println("AS: ES7243 Microphone.");
+      audioSource = new ES7243(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
       break;
     case 3:
-      Serial.println("Attempting to configure SPH0645 Microphone");
-      audioSource = new SPH0654(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFFFFFFF);
+      Serial.println("AS: SPH0645 Microphone");
+      audioSource = new SPH0654(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
+      break;
+    case 4:
+      Serial.println("AS: Generic I2S Microphone with Master Clock");
+      audioSource = new I2SSourceWithMasterClock(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
+      break;
+    case 5:
+      Serial.println("AS: I2S PDM Microphone");
+      audioSource = new I2SPdmSource(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
       break;
     case 0:
     default:
-      Serial.println("Attempting to configure analog Microphone.");
-      audioSource = new I2SAdcSource(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFF);
+      Serial.println("AS: Analog Microphone.");
+      // we don't do the down-shift by 16bit any more
+      //audioSource = new I2SAdcSource(SAMPLE_RATE, BLOCK_SIZE, -4, 0x0FFF);  // request upscaling to 16bit - still produces too much noise
+      audioSource = new I2SAdcSource(SAMPLE_RATE, BLOCK_SIZE, 0, 0x0FFF);     // keep at 12bit - less noise
       break;
   }
-  // if (dmEnabled == 1) {
-  //   Serial.println("Attempting to configure digital Microphone.");
-  //   #ifdef USE_ES7243
-  //     // audioSource = new ES7243(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFFFFFFF);
-  //   #else
-  //     // audioSource = new I2SSource(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFFFFFFF);
-  //     audioSource = new ES7243(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFFFFFFF);
-  //   #endif
-  // } else {
-  //     Serial.println("Attempting to configure analog Microphone.");
-  //     audioSource = new I2SAdcSource(SAMPLE_RATE, BLOCK_SIZE, 16, 0xFFF);
-  // }
+
   delay(100);
+
   audioSource->initialize();
   delay(250);
 
@@ -83,7 +83,12 @@ void userLoop() {
     getSample();                        // Sample the microphone
     agcAvg();                           // Calculated the PI adjusted value as sampleAvg
     myVals[millis()%32] = sampleAgc;
-    logAudio();
+#if defined(MIC_LOGGER) || defined(MIC_SAMPLING_LOG) || defined(FFT_SAMPLING_LOG)
+    EVERY_N_MILLIS(20) {
+      logAudio();
+    }
+#endif
+
   }
   if (audioSyncEnabled & (1 << 0)) {    // Only run the transmit code IF we're in Transmit mode
     //Serial.println("Transmitting UDP Mic Packet");

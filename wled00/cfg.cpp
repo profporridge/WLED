@@ -14,6 +14,7 @@ void getStringFromJson(char* dest, const char* src, size_t len) {
 }
 
 bool deserializeConfig(JsonObject doc, bool fromFS) {
+  bool needsSave = false;
   //int rev_major = doc["rev"][0]; // 1
   //int rev_minor = doc["rev"][1]; // 0
 
@@ -63,7 +64,6 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   if (apHide > 1) apHide = 1;
 
   CJSON(apBehavior, ap[F("behav")]);
-
   /*
   JsonArray ap_ip = ap["ip"];
   for (byte i = 0; i < 4; i++) {
@@ -81,12 +81,13 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   // initialize LED pins and lengths prior to other HW (except for ethernet)
   JsonObject hw_led = hw[F("led")];
 
-  CJSON(ledCount, hw_led[F("total")]);
-  if (ledCount > MAX_LEDS) ledCount = MAX_LEDS;
-
   CJSON(strip.ablMilliampsMax, hw_led[F("maxpwr")]);
   CJSON(strip.milliampsPerLed, hw_led[F("ledma")]);
-  CJSON(strip.rgbwMode, hw_led[F("rgbwm")]);
+  Bus::setAutoWhiteMode(hw_led[F("rgbwm")] | Bus::getAutoWhiteMode());
+  CJSON(correctWB, hw_led["cct"]);
+  CJSON(cctFromRgb, hw_led[F("cr")]);
+	CJSON(strip.cctBlending, hw_led[F("cb")]);
+	Bus::setCCTBlend(strip.cctBlending);
 
   // 2D Matrix Settings
   CJSON(strip.stripOrMatrixPanel, hw_led[F("somp")]);
@@ -107,8 +108,6 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
 
 
   JsonArray ins = hw_led["ins"];
-
-  uint16_t lC = 0;
 
   if (fromFS || !ins.isNull()) {
     uint8_t s = 0;  // bus iterator
@@ -136,15 +135,12 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       bool refresh = elm["ref"] | false;
       ledType |= refresh << 7;  // hack bit 7 to indicate strip requires off refresh
       s++;
-      uint16_t busEnd = start + length;
-      if (busEnd > lC) lC = busEnd;
       BusConfig bc = BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst);
       mem += BusManager::memUsage(bc);
       if (mem <= MAX_LED_MEMORY && busses.getNumBusses() <= WLED_MAX_BUSSES) busses.add(bc);  // finalization will be done in WLED::beginStrip()
     }
     // finalization done in beginStrip()
   }
-  if (lC > ledCount) ledCount = lC; // fix incorrect total length (honour analog setup)
   if (hw_led["rev"]) busses.getBus(0)->reversed = true; //set 0.11 global reversed setting for first bus
 
   // read multiple button configuration
@@ -222,38 +218,41 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   // Sound Reactive Pin Config
   JsonObject analogmic = hw[F("analogmic")]; // analog mic JsonObject
 
-  int hw_amic_pin = analogmic[F("pin")];
-  if (pinManager.allocatePin(hw_amic_pin,false, PinOwner::AnalogMic)) {
-    audioPin = hw_amic_pin;
-  } else {
-    audioPin = audioPin;
-  }
+  // int hw_amic_pin = analogmic[F("pin")];
+  CJSON(audioPin, analogmic[F("pin")]);
+  // if (pinManager.allocatePin(hw_amic_pin,false, PinOwner::AnalogMic)) {
+  //   audioPin = hw_amic_pin;
+  // } else {
+  //   audioPin = audioPin;
+  // }
 
   JsonObject hw_dmic = hw[F("digitalmic")]; // digital mic JsonObject
-  CJSON(dmEnabled, hw_dmic["en"]);
+  CJSON(dmType, hw_dmic["en"]);
 
   JsonObject hw_dmic_pins = hw_dmic["pins"]; // digital mic pins JsonObject
 
-  int hw_i2ssd_pin = hw_dmic_pins[F("i2ssd")];
-  if (pinManager.allocatePin(hw_i2ssd_pin,false, PinOwner::DigitalMic)) {
-    i2ssdPin = hw_i2ssd_pin;
-  } else {
-    i2ssdPin = i2ssdPin;
-  }
+  CJSON(i2ssdPin, hw_dmic_pins[F("i2ssd")]);
+  // int hw_i2ssd_pin = hw_dmic_pins[F("i2ssd")];
+  // if (pinManager.allocatePin(hw_i2ssd_pin,false, PinOwner::DigitalMic)) {
+  //   i2ssdPin = hw_i2ssd_pin;
+  // } else {
+  //   i2ssdPin = i2ssdPin;
+  // }
+  CJSON(i2swsPin, hw_dmic_pins[F("i2sws")]);
+  // int hw_i2sws_pin = hw_dmic_pins[F("i2sws")];
+  // if (pinManager.allocatePin(hw_i2sws_pin,false, PinOwner::DigitalMic)) {
+  //   i2swsPin = hw_i2sws_pin;
+  // } else {
+  //   i2swsPin = i2swsPin;
+  // }
 
-  int hw_i2sws_pin = hw_dmic_pins[F("i2sws")];
-  if (pinManager.allocatePin(hw_i2sws_pin,false, PinOwner::DigitalMic)) {
-    i2swsPin = hw_i2sws_pin;
-  } else {
-    i2swsPin = i2swsPin;
-  }
-
-  int hw_i2sck_pin = hw_dmic_pins[F("i2sck")];
-  if (pinManager.allocatePin(hw_i2sck_pin,false, PinOwner::DigitalMic)) {
-    i2sckPin = hw_i2sck_pin;
-  } else {
-    i2sckPin = i2sckPin;
-  }
+  CJSON(i2sckPin, hw_dmic_pins[F("i2sck")]);
+  // int hw_i2sck_pin = hw_dmic_pins[F("i2sck")];
+  // if (pinManager.allocatePin(hw_i2sck_pin,false, PinOwner::DigitalMic)) {
+  //   i2sckPin = hw_i2sck_pin;
+  // } else {
+  //   i2sckPin = i2sckPin;
+  // }
 
   //int hw_status_pin = hw[F("status")]["pin"]; // -1
 
@@ -285,7 +284,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   CJSON(macroNl, light_nl["macro"]);
 
   JsonObject def = doc[F("def")];
-  CJSON(bootPreset, def[F("ps")]);
+  CJSON(bootPreset, def["ps"]);
   CJSON(turnOnAtBoot, def["on"]); // true
   CJSON(briS, def["bri"]); // 128
 
@@ -463,12 +462,12 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   CJSON(DMXStartLED,dmx[F("start-led")]);
 
   JsonArray dmx_fixmap = dmx[F("fixmap")];
-  it = 0;
-  for (int i : dmx_fixmap) {
-    if (it > 14) break;
+  for (int i = 0; i < dmx_fixmap.size(); i++) {
+    if (i > 14) break;
     CJSON(DMXFixtureMap[i],dmx_fixmap[i]);
-    it++;
   }
+
+  CJSON(e131ProxyUniverse, dmx[F("e131proxy")]);
   #endif
 
   // Begin Sound Reactive specific settings - 1st attempt
@@ -479,10 +478,10 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   CJSON(sampleGain, snd_cfg[F("gn")]);        // gain
   CJSON(soundAgc, snd_cfg[F("agc")]);         // agc
 
-  JsonObject snd_fft = sound[F("fft")];       // FFT Settings
-  CJSON(effectFFT1, snd_fft[F("f1")]);
-  CJSON(effectFFT2, snd_fft[F("f2")]);
-  CJSON(effectFFT3, snd_fft[F("f3")]);
+  JsonObject snd_custom = sound[F("custom")];       // Custom settings
+  CJSON(effectCustom1, snd_custom[F("c1")]);
+  CJSON(effectCustom2, snd_custom[F("c2")]);
+  CJSON(effectCustom3, snd_custom[F("c3")]);
 
   JsonObject snd_sync = sound[F("sync")];     // Sound Reactive audio sync
   CJSON(audioSyncPort, snd_sync[F("port")]);  // 11988
@@ -491,11 +490,10 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   DEBUG_PRINTLN(F("Starting usermod config."));
   JsonObject usermods_settings = doc["um"];
   if (!usermods_settings.isNull()) {
-    bool allComplete = usermods.readFromConfig(usermods_settings);
-    if (!allComplete && fromFS) serializeConfig();
+    needsSave = !usermods.readFromConfig(usermods_settings);
   }
 
-  if (fromFS) return false;
+  if (fromFS) return needsSave;
   doReboot = doc[F("rb")] | doReboot;
   return (doc["sv"] | true);
 }
@@ -507,19 +505,27 @@ void deserializeConfigFromFS() {
     return;
   }
 
+  #ifdef WLED_USE_DYNAMIC_JSON
   DynamicJsonDocument doc(JSON_BUFFER_SIZE);
+  #else
+  if (!requestJSONBufferLock(1)) return;
+  #endif
 
   DEBUG_PRINTLN(F("Reading settings from /cfg.json..."));
 
   success = readObjectFromFile("/cfg.json", nullptr, &doc);
   if (!success) { //if file does not exist, try reading from EEPROM
     deEEPSettings();
+    releaseJSONBufferLock();
     return;
   }
 
   // NOTE: This routine deserializes *and* applies the configuration
   //       Therefore, must also initialize ethernet from this function
-  deserializeConfig(doc.as<JsonObject>(), true);
+  bool needsSave = deserializeConfig(doc.as<JsonObject>(), true);
+  releaseJSONBufferLock();
+
+  if (needsSave) serializeConfig(); // usermods required new prameters
 }
 
 void serializeConfig() {
@@ -527,7 +533,11 @@ void serializeConfig() {
 
   DEBUG_PRINTLN(F("Writing settings to /cfg.json..."));
 
+  #ifdef WLED_USE_DYNAMIC_JSON
   DynamicJsonDocument doc(JSON_BUFFER_SIZE);
+  #else
+  if (!requestJSONBufferLock(2)) return;
+  #endif
 
   JsonArray rev = doc.createNestedArray("rev");
   rev.add(1); //major settings revision
@@ -602,10 +612,13 @@ void serializeConfig() {
   JsonObject hw = doc.createNestedObject("hw");
 
   JsonObject hw_led = hw.createNestedObject("led");
-  hw_led[F("total")] = ledCount;
+  hw_led[F("total")] = strip.getLengthTotal(); //no longer read, but provided for compatibility on downgrade
   hw_led[F("maxpwr")] = strip.ablMilliampsMax;
   hw_led[F("ledma")] = strip.milliampsPerLed;
-  hw_led[F("rgbwm")] = strip.rgbwMode;
+  hw_led["cct"] = correctWB;
+  hw_led[F("cr")] = cctFromRgb;
+	hw_led[F("cb")] = strip.cctBlending;
+	hw_led[F("rgbwm")] = Bus::getAutoWhiteMode();
 
   // 2D Matrix Settings
   hw_led[F("somp")] = strip.stripOrMatrixPanel;
@@ -639,7 +652,7 @@ void serializeConfig() {
     ins[F("order")] = bus->getColorOrder();
     ins["rev"] = bus->reversed;
     ins[F("skip")] = bus->skippedLeds();
-    ins["type"] = bus->getType() & 0x7F;;
+    ins["type"] = bus->getType() & 0x7F;
     ins["ref"] = bus->isOffRefreshRequired();
     ins[F("rgbw")] = bus->isRgbw();
   }
@@ -680,7 +693,7 @@ void serializeConfig() {
   hw_amic["pin"] = audioPin;
 
   JsonObject hw_dmic = hw.createNestedObject("digitalmic");
-  hw_dmic["en"] = dmEnabled;
+  hw_dmic["en"] = dmType;
 
   JsonObject hw_dmic_pins = hw_dmic.createNestedObject("pins");
   hw_dmic_pins[F("i2ssd")] = i2ssdPin;
@@ -708,7 +721,7 @@ void serializeConfig() {
   light_nl["macro"] = macroNl;
 
   JsonObject def = doc.createNestedObject("def");
-  def[F("ps")] = bootPreset;
+  def["ps"] = bootPreset;
   def["on"] = turnOnAtBoot;
   def["bri"] = briS;
 
@@ -851,8 +864,11 @@ void serializeConfig() {
   dmx[F("start-led")] = DMXStartLED;
 
   JsonArray dmx_fixmap = dmx.createNestedArray(F("fixmap"));
-  for (byte i = 0; i < 15; i++)
+  for (byte i = 0; i < 15; i++) {
     dmx_fixmap.add(DMXFixtureMap[i]);
+  }
+
+  dmx[F("e131proxy")] = e131ProxyUniverse;
   #endif
 
   // Begin Sound Reactive specific settings - 1st attempt
@@ -863,10 +879,10 @@ void serializeConfig() {
   snd_cfg[F("gn")] = sampleGain;
   snd_cfg[F("agc")] = soundAgc;
 
-  JsonObject snd_fft = sound.createNestedObject("fft");   // FFT Settings
-  snd_fft[F("f1")] = effectFFT1;
-  snd_fft[F("f2")] = effectFFT2;
-  snd_fft[F("f3")] = effectFFT3;
+  JsonObject snd_custom = sound.createNestedObject("custom");   // Custom settings
+  snd_custom[F("c1")] = effectCustom1;
+  snd_custom[F("c2")] = effectCustom2;
+  snd_custom[F("c3")] = effectCustom3;
 
   JsonObject snd_sync = sound.createNestedObject("sync"); // Sound Reactive audio sync
   snd_sync[F("port")] = audioSyncPort;  // 11988
@@ -878,16 +894,24 @@ void serializeConfig() {
   File f = WLED_FS.open("/cfg.json", "w");
   if (f) serializeJson(doc, f);
   f.close();
+  releaseJSONBufferLock();
 }
 
 //settings in /wsec.json, not accessible via webserver, for passwords and tokens
 bool deserializeConfigSec() {
   DEBUG_PRINTLN(F("Reading settings from /wsec.json..."));
 
+  #ifdef WLED_USE_DYNAMIC_JSON
   DynamicJsonDocument doc(JSON_BUFFER_SIZE);
+  #else
+  if (!requestJSONBufferLock(3)) return false;
+  #endif
 
   bool success = readObjectFromFile("/wsec.json", nullptr, &doc);
-  if (!success) return false;
+  if (!success) {
+    releaseJSONBufferLock();
+    return false;
+  }
 
   JsonObject nw_ins_0 = doc["nw"]["ins"][0];
   getStringFromJson(clientPass, nw_ins_0["psk"], 65);
@@ -919,13 +943,18 @@ bool deserializeConfigSec() {
   CJSON(wifiLock, ota[F("lock-wifi")]);
   CJSON(aOtaEnabled, ota[F("aota")]);
 
+  releaseJSONBufferLock();
   return true;
 }
 
 void serializeConfigSec() {
   DEBUG_PRINTLN(F("Writing settings to /wsec.json..."));
 
+  #ifdef WLED_USE_DYNAMIC_JSON
   DynamicJsonDocument doc(JSON_BUFFER_SIZE);
+  #else
+  if (!requestJSONBufferLock(4)) return;
+  #endif
 
   JsonObject nw = doc.createNestedObject("nw");
 
@@ -960,4 +989,5 @@ void serializeConfigSec() {
   File f = WLED_FS.open("/wsec.json", "w");
   if (f) serializeJson(doc, f);
   f.close();
+  releaseJSONBufferLock();
 }
