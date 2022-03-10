@@ -62,7 +62,6 @@
 #ifdef USERMOD_AUTO_SAVE
 #include "../usermods/usermod_v2_auto_save/usermod_v2_auto_save.h"
 #endif
-
 #ifdef USERMOD_DHT
 #include "../usermods/DHT/usermod_dht.h"
 #endif

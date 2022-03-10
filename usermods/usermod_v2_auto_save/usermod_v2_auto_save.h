@@ -46,7 +46,7 @@ class AutoSaveUsermod : public Usermod {
     uint8_t knownMode = 0;
     uint8_t knownPalette = 0;
 
-    #ifdef USERMOD_FOUR_LINE_DISPLAY
+#ifdef USERMOD_FOUR_LINE_DISPLAY
     FourLineDisplayUsermod* display;
     #endif
 
@@ -81,7 +81,7 @@ class AutoSaveUsermod : public Usermod {
     // gets called once at boot. Do all initialization that doesn't depend on
     // network here
     void setup() {
-      #ifdef USERMOD_FOUR_LINE_DISPLAY    
+#ifdef USERMOD_FOUR_LINE_DISPLAY    
       // This Usermod has enhanced funcionality if
       // FourLineDisplayUsermod is available.
       display = (FourLineDisplayUsermod*) usermods.lookup(USERMOD_ID_FOUR_LINE_DISP);
@@ -135,12 +135,22 @@ class AutoSaveUsermod : public Usermod {
       }
     }
 
-    /*
-     * addToJsonInfo() can be used to add custom entries to the /json/info part of the JSON API.
-     * Creating an "u" object allows you to add custom key/value pairs to the Info section of the WLED web UI.
-     * Below it is shown how this could be used for e.g. a light sensor
-     */
-    //void addToJsonInfo(JsonObject& root) {
+    void saveSettings() {
+      updateLocalTime();
+      sprintf(presetNameBuffer, 
+        "Auto save %02d-%02d %02d:%02d:%02d",
+        month(localTime), day(localTime),
+        hour(localTime), minute(localTime), second(localTime));
+      savePreset(AUTOSAVE_PRESET_NUM, true, presetNameBuffer);
+    }
+
+    void displayOverlay() {
+#ifdef USERMOD_FOUR_LINE_DISPLAY
+      if (display != nullptr) {
+        display->wakeDisplay();
+        display->overlay("Settings", "Auto Saved", 1500);
+      }
+#endif
       //JsonObject user = root["u"];
       //if (user.isNull()) user = root.createNestedObject("u");
       //JsonArray data = user.createNestedArray(F("Autosave"));
@@ -151,8 +161,8 @@ class AutoSaveUsermod : public Usermod {
      * addToJsonState() can be used to add custom entries to the /json/state part of the JSON API (state object).
      * Values in the state object may be modified by connected clients
      */
-    //void addToJsonState(JsonObject& root) {
-    //}
+    void addToJsonState(JsonObject& root) {
+    }
 
     /*
      * readFromJsonState() can be used to receive data clients send to the /json/state part of the JSON API (state object).
