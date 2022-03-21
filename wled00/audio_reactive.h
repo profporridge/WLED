@@ -14,17 +14,17 @@
 //
 // Otherwise, the animations may asynchronously read interim values of these variables.
 //
-
+#pragma once
 #include "wled.h"
 #include <driver/i2s.h>
 #include "audio_source.h"
 
-AudioSource *audioSource;
+AudioSource<float> *audioSource;
 
 // ALL AUDIO INPUT PINS DEFINED IN wled.h AND CONFIGURABLE VIA UI
 
 // Comment/Uncomment to toggle usb serial debugging
-// #define SR_DEBUG
+ //#define SR_DEBUG
 
 #ifdef SR_DEBUG
   #define DEBUGSR_PRINT(x) Serial.print(x)
@@ -89,8 +89,8 @@ double FFT_Magnitude = 0;
 uint16_t mAvg = 0;
 
 // These are the input and output vectors.  Input vectors receive computed results from FFT.
-double vReal[samples];
-double vImag[samples];
+float vReal[samples];
+float vImag[samples];
 double fftBin[samples];
 
 // Try and normalize fftBin values to a max of 4096, so that 4096/16 = 256.
@@ -270,10 +270,12 @@ void transmitAudioData() {
 } // transmitAudioData()
 
 
-
+float weighingFactors[samples];
 
 // Create FFT object
-arduinoFFT FFT = arduinoFFT( vReal, vImag, samples, SAMPLE_RATE );
+ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samples, SAMPLE_RATE, weighingFactors );
+
+
 
 double fftAdd( int from, int to) {
   int i = from;
@@ -318,14 +320,14 @@ void FFTcode( void * parameter) {
     }
 	  micDataSm = (uint16_t)maxSample;
 
-    FFT.DCRemoval(); // let FFT lib remove DC component, so we don't need to care about this in getSamples()	
+    FFT.dcRemoval(); // let FFT lib remove DC component, so we don't need to care about this in getSamples()	
 
     //FFT.Windowing( FFT_WIN_TYP_HAMMING, FFT_FORWARD );        // Weigh data - standard Hamming window
     //FFT.Windowing( FFT_WIN_TYP_BLACKMAN, FFT_FORWARD );       // Blackman window - better side freq rejection
     //FFT.Windowing( FFT_WIN_TYP_BLACKMAN_HARRIS, FFT_FORWARD );// Blackman-Harris - excellent sideband rejection
-    FFT.Windowing( FFT_WIN_TYP_FLT_TOP, FFT_FORWARD );         // Flat Top Window - better amplitude accuracy
-    FFT.Compute( FFT_FORWARD );                             // Compute FFT
-    FFT.ComplexToMagnitude();                               // Compute magnitudes
+    FFT.windowing( FFTWindow::Flat_top, FFTDirection::Forward );         // Flat Top Window - better amplitude accuracy
+    FFT.compute( FFTDirection::Forward );                             // Compute FFT
+    FFT.complexToMagnitude();                               // Compute magnitudes
 
     //
     // vReal[3 .. 255] contain useful data, each a 20Hz interval (60Hz - 5120Hz).
@@ -359,8 +361,11 @@ void FFTcode( void * parameter) {
     xtemp[22] = vReal[samples-2]; vReal[samples-2] =0.0;
     xtemp[23] = vReal[samples-1]; vReal[samples-1] =0.0;
 #endif
-
-    FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);          // let the effects know which freq was most dominant
+float MP=FFT_MajorPeak; 
+float Mag=FFT_Magnitude;
+    FFT.majorPeak(MP,  Mag);    
+    FFT_Magnitude=Mag;
+    FFT_MajorPeak=MP;      // let the effects know which freq was most dominant
 
 #ifdef MAJORPEAK_SUPPRESS_NOISE
 	// dirty hack: limit suppressed channel intensities to FFT_Magnitude

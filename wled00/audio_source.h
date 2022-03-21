@@ -49,6 +49,8 @@
    This enables accessing all microphones with one single interface
    which simplifies the caller code
 */
+
+template <typename T>
 class AudioSource {
 public:
     /* All public methods are virtual, so they can be overridden
@@ -73,11 +75,11 @@ public:
        Read num_samples from the microphone, and store them in the provided
        buffer
     */
-    virtual void getSamples(double *buffer, uint16_t num_samples) = 0;
+    virtual void getSamples(T *buffer, uint16_t num_samples) = 0;
 
     /* Get an up-to-date sample without DC offset */
     virtual int getSampleWithoutDCOffset() = 0;
-
+    
 protected:
     // Private constructor, to make sure it is not callable except from derived classes
     AudioSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) : _sampleRate(sampleRate), _blockSize(blockSize), _sampleNoDCOffset(0), _dcOffset(0.0f), _shift(lshift), _mask(mask), _initialized(false) {};
@@ -94,19 +96,21 @@ protected:
 /* Basic I2S microphone source
    All functions are marked virtual, so derived classes can replace them
 */
-class I2SSource : public AudioSource {
+
+template <typename T>
+class I2SSource : public AudioSource<T> {
 public:
-    I2SSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        AudioSource(sampleRate, blockSize, lshift, mask) {
+    I2SSource<T>(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
+        AudioSource<T>(sampleRate, blockSize, lshift, mask) {
         _config = {
             .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
-            .sample_rate = _sampleRate,
+            .sample_rate = sampleRate,
             .bits_per_sample = I2S_SAMPLE_RESOLUTION,
             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
             .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
             .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
             .dma_buf_count = 8,
-            .dma_buf_len = _blockSize
+            .dma_buf_len = blockSize
         };
 
         _pinConfig = {
@@ -116,8 +120,7 @@ public:
             .data_in_num = i2ssdPin
         };
     };
-
-
+   
 
 
     virtual void initialize() {
@@ -145,11 +148,11 @@ public:
             return;
         }
 
-        _initialized = true;
+        AudioSource<T>::_initialized = true;
     }
 
     virtual void deinitialize() {
-        _initialized = false;
+        AudioSource<T>::_initialized = false;
         esp_err_t err = i2s_driver_uninstall(I2S_NUM_0);
         if (err != ESP_OK) {
             Serial.printf("Failed to uninstall i2s driver: %d\n", err);
@@ -163,14 +166,14 @@ public:
         }
     }
 
-    virtual void getSamples(double *buffer, uint16_t num_samples) {
-        if(_initialized) {
+    virtual void getSamples(T *buffer, uint16_t num_samples) {
+        if(AudioSource<T>::_initialized) {
             esp_err_t err;
             size_t bytes_read = 0;        /* Counter variable to check if we actually got enough data */
             I2S_datatype samples[num_samples]; /* Intermediary sample storage */
 
             // Reset dc offset
-            _dcOffset = 0.0f;
+            AudioSource<T>::_dcOffset = 0.0f;
 
             err = i2s_read(I2S_NUM_0, (void *)samples, sizeof(samples), &bytes_read, portMAX_DELAY);
             if ((err != ESP_OK)){
@@ -191,31 +194,32 @@ public:
                 samples[i] >>= 16;
 #endif
                 // pre-processing of ADC samples
-                if (_mask == 0x0FFF) { // 0x0FFF means that we have 12bit unsigned data from ADC -> convert to signed
+                if (AudioSource<T>::_mask == 0x0FFF) { // 0x0FFF means that we have 12bit unsigned data from ADC -> convert to signed
                    samples[i] = samples[i] - 2048;
                 }
                 // From the old code.
                 // double sample = (double)abs((samples[i] >> _shift));
-                double sample = 0.0;
-                if(_shift > 0)
-                  sample = (double) (samples[i] >> _shift);
+                T sample = 0.0;
+                if(AudioSource<T>::_shift > 0)
+                  sample = (T) (samples[i] >> AudioSource<T>::_shift);
                 else {
-                  if(_shift < 0)
-                    sample = (double) (samples[i] << (- _shift)); // need to "pump up" 12bit ADC to full 16bit as delivered by other digital mics
+                  if(AudioSource<T>::_shift < 0)
+                    sample = (T) (samples[i] << (- AudioSource<T>::_shift)); // need to "pump up" 12bit ADC to full 16bit as delivered by other digital mics
                   else
-                    sample = (double) samples[i];
+                    sample = (T) samples[i];
                 }
                 buffer[i] = sample;
-                _dcOffset = ((_dcOffset * 31) + sample) / 32;
+                AudioSource<T>::_dcOffset = ((AudioSource<T>::_dcOffset * 31) + sample) / 32;
             }
 
             // Update no-DC sample
-            _sampleNoDCOffset = buffer[num_samples - 1] - _dcOffset;
+            AudioSource<T>::_sampleNoDCOffset = buffer[num_samples - 1] - AudioSource<T>::_dcOffset;
         }
     }
 
+
     virtual int getSampleWithoutDCOffset() {
-        return _sampleNoDCOffset;
+        return AudioSource<T>::_sampleNoDCOffset;
     }
 
 protected:
@@ -227,10 +231,12 @@ protected:
    Our version of the IDF does not support setting master clock
    routing via the provided API, so we have to do it by hand
 */
-class I2SSourceWithMasterClock : public I2SSource {
+
+template <typename T>
+class I2SSourceWithMasterClock : public I2SSource<T> {
 public:
     I2SSourceWithMasterClock(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource(sampleRate, blockSize, lshift, mask) {
+        I2SSource<T>(sampleRate, blockSize, lshift, mask) {
     };
 
     virtual void initialize() {
@@ -239,14 +245,14 @@ public:
             return;
         }
         _routeMclk();
-        I2SSource::initialize();
+        I2SSource<T>::initialize();
 
     }
 
     virtual void deinitialize() {
         // Release the master clock pin
         pinManager.deallocatePin(mclkPin, PinOwner::DigitalMic);
-        I2SSource::deinitialize();
+        I2SSource<T>::deinitialize();
     }
 protected:
     void _routeMclk() {
@@ -270,7 +276,9 @@ protected:
    This is an I2S microphone that requires ininitialization over
    I2C before I2S data can be received
 */
-class ES7243 : public I2SSourceWithMasterClock {
+
+template <typename T>
+class ES7243 : public I2SSourceWithMasterClock<T> {
 
 private:
     // I2C initialization functions for ES7243
@@ -298,8 +306,8 @@ private:
 public:
 
     ES7243(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSourceWithMasterClock(sampleRate, blockSize, lshift, mask) {
-        _config.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
+        I2SSourceWithMasterClock<T>(sampleRate, blockSize, lshift, mask) {
+        I2SSource<T>::_config.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
     };
     void initialize() {
         // Reserve SDA and SCL pins of the I2C interface
@@ -310,14 +318,14 @@ public:
 
         // First route mclk, then configure ADC over I2C, then configure I2S
         _es7243InitAdc();
-        I2SSourceWithMasterClock::initialize();
+        I2SSourceWithMasterClock<T>::initialize();
     }
 
     void deinitialize() {
         // Release SDA and SCL pins of the I2C interface
         pinManager.deallocatePin(pin_ES7243_SDA, PinOwner::DigitalMic);
         pinManager.deallocatePin(pin_ES7243_SCL, PinOwner::DigitalMic);
-        I2SSourceWithMasterClock::deinitialize();
+        I2SSourceWithMasterClock<T>::deinitialize();
     }
 };
 
@@ -326,19 +334,21 @@ public:
    This allows to use the I2S API to obtain ADC samples with high sample rates
    without the need of manual timing of the samples
 */
-class I2SAdcSource : public I2SSource {
+
+template <typename T>
+class I2SAdcSource : public I2SSource<T> {
 public:
     I2SAdcSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource(sampleRate, blockSize, lshift, mask){
-        _config = {
+        I2SSource<T>(sampleRate, blockSize, lshift, mask){
+        I2SSource<T>::_config = {
             .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN),
-            .sample_rate = _sampleRate,
+            .sample_rate = AudioSource<T>::_sampleRate,
             .bits_per_sample = I2S_SAMPLE_RESOLUTION,
             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
             .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
             .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
             .dma_buf_count = 8,
-            .dma_buf_len = _blockSize
+            .dma_buf_len = AudioSource<T>::_blockSize
         };
     }
 
@@ -357,7 +367,8 @@ public:
         }
 
         // Install Driver
-        esp_err_t err = i2s_driver_install(I2S_NUM_0, &_config, 0, nullptr);
+        i2s_config_t config = (i2s_config_t)(I2SSource<T>::_config);
+        esp_err_t err = i2s_driver_install(I2S_NUM_0, &config, 0, nullptr);
         if (err != ESP_OK) {
             Serial.printf("Failed to install i2s driver: %d\n", err);
             return;
@@ -380,15 +391,15 @@ public:
         }
 #endif
 
-        _initialized = true;
+        AudioSource<T>::_initialized = true;
     }
 
-    void getSamples(double *buffer, uint16_t num_samples) {
+    void getSamples(T *buffer, uint16_t num_samples) {
 
     /* Enable ADC. This has to be enabled and disabled directly before and
     after sampling, otherwise Wifi dies
     */
-        if (_initialized) {
+        if (AudioSource<T>::_initialized) {
 #if !defined(ARDUINO_ARCH_ESP32)
 			// old code - works for me without enable/disable, at least on ESP32.
             esp_err_t err = i2s_adc_enable(I2S_NUM_0);
@@ -398,7 +409,7 @@ public:
                 return;
             }
 #endif
-            I2SSource::getSamples(buffer, num_samples);
+            I2SSource<T>::getSamples(buffer, num_samples);
 
 #if !defined(ARDUINO_ARCH_ESP32)
 			// old code - works for me without enable/disable, at least on ESP32.
@@ -414,7 +425,7 @@ public:
 
     void deinitialize() {
         pinManager.deallocatePin(audioPin, PinOwner::AnalogMic);
-        _initialized = false;
+        AudioSource<T>::_initialized = false;
         esp_err_t err;
 #if defined(ARDUINO_ARCH_ESP32)
         // according to docs from espressif, the ADC needs to be stopped explicitly
@@ -437,14 +448,16 @@ public:
    This is an I2S microphone with some timing quirks that need
    special consideration.
 */
-class SPH0654 : public I2SSource {
+
+template <typename T>
+class SPH0654 : public I2SSource<T> {
 
 public:
     SPH0654(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource(sampleRate, blockSize, lshift, mask){}
+        I2SSource<T>(sampleRate, blockSize, lshift, mask){}
 
     void initialize() {
-        I2SSource::initialize();
+        I2SSource<T>::initialize();
         REG_SET_BIT(I2S_TIMING_REG(I2S_NUM_0), BIT(9));
         REG_SET_BIT(I2S_CONF_REG(I2S_NUM_0), I2S_RX_MSB_SHIFT);
     }
@@ -456,15 +469,16 @@ public:
    pin as DATA
 */
 
-class I2SPdmSource : public I2SSource {
+template <typename T>
+class I2SPdmSource : public I2SSource <T>{
 
 public:
     I2SPdmSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource(sampleRate, blockSize, lshift, mask) {
+        I2SSource<T>(sampleRate, blockSize, lshift, mask) {
 
-        _config.mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); // Change mode to pdm
+        I2SSource<T>::_config.mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); // Change mode to pdm
 
-        _pinConfig = {
+        I2SSource<T>::_pinConfig = {
             .bck_io_num = I2S_PIN_NO_CHANGE, // bck is unused in PDM mics
             .ws_io_num = i2swsPin, // clk pin for PDM mic
             .data_out_num = I2S_PIN_NO_CHANGE,
