@@ -40,9 +40,9 @@ const char PAGE_update[] PROGMEM = R"=====(<!DOCTYPE html><html><head><meta cont
 function B(){window.history.back()}function U(){document.getElementById("uf").style.display="none",document.getElementById("msg").style.display="block"}
 </script><style>
 .bt{background:#333;color:#fff;font-family:Verdana,sans-serif;border:.3ch solid #333;display:inline-block;font-size:20px;margin:8px;margin-top:12px}input[type=file]{font-size:16px}body{font-family:Verdana,sans-serif;text-align:center;background:#222;color:#fff;line-height:200%}#msg{display:none}
-</style></head><body><h2>WLED Software Update</h2><form method="POST" 
-action="/update" id="uf" enctype="multipart/form-data" onsubmit="U()">
-Installed version: 0.13.1<br>Download the latest binary: <a 
+</style></head><body><h2>Sound Reactive WLED Software Update</h2><form 
+method="POST" action="/update" id="uf" enctype="multipart/form-data" 
+onsubmit="U()">Installed version: SR 0.13.3<br>Download the latest binary: <a 
 href="https://github.com/atuline/WLED/releases" target="_blank"><img 
 src="https://img.shields.io/github/release/atuline/WLED.svg?style=flat-square">
 </a><br><input type="file" class="bt" name="update" required><br><input 
@@ -58,7 +58,7 @@ content="#222222"><title>Welcome!</title><style>
 body{font-family:Verdana,Helvetica,sans-serif;text-align:center;background-color:#222;margin:0;color:#fff}button{outline:0;cursor:pointer;padding:8px;margin:10px;width:230px;text-transform:uppercase;font-family:helvetica;font-size:19px;background-color:#333;color:#fff;border:0 solid #fff;border-radius:25px}img{width:950px;max-width:82%;image-rendering:pixelated;image-rendering:crisp-edges;margin:4vh 0 0 0;animation:fi 1s}@keyframes fi{from{opacity:0}to{opacity:1}}.main{animation:fi 1.5s .7s both}
 </style></head><body><img alt="" 
 src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAfCAMAAADazLOuAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAABLUExURQAAAAB81gCU/zKq///mo7sWMN8bO+ZIYtZaAP9rAP+HMsCiG+TAIOnMS0KqNU7KPnLUZOrq6v///4CAgGhoaL+/v6CgoExMTAAAAAlm4O8AAAAZdFJOU////////////////////////////////wABNAq3AAAACXBIWXMAAA7DAAAOwwHHb6hkAAACN0lEQVRIS73VjVLCMBAEYIr8CYKkrdj3f1J37zaXFCpTO+piaDgbPq9px9VQ0qyrvKj4q6m0Zr1h+M7xF1zRmnWzqV9/0d2jttGotO1uv9dUObwej5oqp7fzWVPl8n69aprzoOUUbbvdIbV3OLwitXc6vSG1d7m8I3feSEN0j2CeNbOY4MxigjOLCc4sZsTV2l1cCyy4wIILLLjAxtykltq2rbTU+qi01N5rXNO2leaFORoija2l5MM5a02ac9Ya16Sk5tgaPrUpjZub0BL6YqSxKwbH77XUUmSkJXSl8QtaMuyJhq5maL5nTKVpZC13VmtMpTFT2g4vJjTuGfMzzXftiUZnhdtgb1xofvypRon5TjNnxYN9zJo6K5ruSIzQtGuVZn0x91rKvdHBvm39E7SyZ4y06Gz8BDBFKzsXmhcwyfsGZ9VpbhoiCinaxPNmGWmWWrNU2jB0q6HvOhN1JUtCixQtp2g51ZVUXIPS2RMAD++T2nY/DrDjOMDO4wC7jmNYj3d73nrXug8Yt9uNB8xNU1cKNXWlUFNXCjV1pZhGTE83m2vWfYf/NGj4Bg1zu5JD3/MnH5ZWfLOksbmGWGjgXMN5/C2GXYGFFW9Nmtle6Xut0Gm+JsayCj8z0nhjGvYJzVf4aSzmNYsr+u7Q2JIdoX3YOQjOslmsW1jJ3120nE9gfo79hTaNdcsqVR610lvO47pllae9ReZ805zKo2a3iaY5c75pTmVCA6dJ5H7N0sr/asPwBehb7ifEhusRAAAAAElFTkSuQmCC">
-<div class="main"><h1>Welcome to WLED!</h1><h3>
+<div class="main"><h1>Welcome to SR WLED!</h1><h3>
 Thank you for installing my application!</h3><b>Next steps:</b><br><br>
 Connect the module to your local WiFi here!<br><button 
 onclick='window.location.href="/settings/wifi"'>WiFi settings</button><br><i>
@@ -85,7 +85,19 @@ charset="utf-8"><meta name="theme-color" content="#222222"><title>
 WLED Live Preview</title><style>
 body{margin:0}#canv{background:#000;filter:brightness(175%);width:100%;height:100%;position:absolute}
 </style></head><body><div id="canv"><script>
-function updatePreview(e){var n="linear-gradient(90deg,",o=e.length;for(i=2;i<o;i+=3)n+=`rgb(${e[i]},${e[i+1]},${e[i+2]})`,i<o-3&&(n+=",");n+=")",document.getElementById("canv").style.background=n}function getLiveJson(e){try{if("[object ArrayBuffer]"===toString.call(e.data)){let e=new Uint8Array(event.data);if(76!=e[0])return;updatePreview(e)}}catch(e){console.error("Peek WS error:",e)}}var ws=top.window.ws;ws&&ws.readyState===WebSocket.OPEN?(console.info("Peek uses top WS"),ws.send("{'lv':true}")):(console.info("Peek WS opening"),(ws=new WebSocket(("https:"==window.location.protocol?"wss":"ws")+"://"+document.location.host+"/ws")).onopen=function(){console.info("Peek WS open"),ws.send("{'lv':true}")}),ws.binaryType="arraybuffer",ws.addEventListener("message",getLiveJson)
+function updatePreview(e){var n="linear-gradient(90deg,",t=e.length;for(i=6;i<t;i+=3)n+=`rgb(${e[i]},${e[i+1]},${e[i+2]})`,i<t-3&&(n+=",");n+=")",document.getElementById("canv").style.background=n}function getLiveJson(e){try{if("[object ArrayBuffer]"===toString.call(e.data)){let e=new Uint8Array(event.data);if(76!=e[0])return;updatePreview(e)}}catch(e){console.error("Peek WS error:",e)}}var ws;try{ws=top.window.ws}catch(e){}ws&&ws.readyState===WebSocket.OPEN?(console.info("Peek uses top WS"),ws.send("{'lv':true}")):(console.info("Peek WS opening"),(ws=new WebSocket(("https:"==window.location.protocol?"wss":"ws")+"://"+document.location.host+"/ws")).onopen=function(){console.info("Peek WS open"),ws.send("{'lv':true}")}),ws.binaryType="arraybuffer",ws.addEventListener("message",getLiveJson)
+</script></body></html>)=====";
+
+
+// Autogenerated from wled00/data/liveviewws2D.htm, do not edit!!
+const char PAGE_liveviewws2D[] PROGMEM = R"=====(<!DOCTYPE html><html><head><meta name="viewport" 
+content="width=device-width,initial-scale=1,minimum-scale=1"><meta 
+charset="utf-8"><meta name="theme-color" content="#222222"><title>
+WLED Live Preview</title><style>body{margin:0}</style></head><body><canvas 
+id="liveviewCanvas">LiveView</canvas><script 
+src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js">
+</script><script>
+var ws,c=document.getElementById("liveviewCanvas"),ctx=null,pPL=0,lOf=0,mW=0,mH=0,renderer=null,scene=null,camera=null,mD=0;function updatePreview(e){if(mW=e[3],mH=e[4],mD=e[5],1==e[2]){for(ctx||(c.width=.98*window.innerWidth,c.height=.98*window.innerHeight,ctx=c.getContext("2d"),pPL=Math.min(c.width/mW,(c.height-10)/mH),lOf=Math.floor((c.width-pPL*mW)/2)),ctx.clearRect(0,0,c.width,c.height),a=8;a<e.length;a+=3){let t=(a-8)/3;ctx.fillStyle=`rgb(${e[a]},${e[a+1]},${e[a+2]})`,ctx.beginPath(),ctx.arc(t%mW*pPL+.5*pPL+lOf,Math.floor(t/mW)*pPL+.5*pPL,.4*pPL,0,2*Math.PI),ctx.fill()}ctx.fillStyle="rgb(255,255,255)",0!=e[6]&&ctx.fillText("preset "+e[6].toString(),lOf,mH*pPL+10),255!=e[7]&&ctx.fillText("playlist "+e[7].toString(),lOf+70,mH*pPL+10)}else if(2==e[2]){if(!renderer){c.width=0,c.height=0,(renderer=new THREE.WebGLRenderer({alpha:!0})).setClearAlpha(0),renderer.setClearColor(0,0),renderer.setSize(.98*window.innerWidth,.98*window.innerHeight),document.body.appendChild(renderer.domElement),(camera=new THREE.PerspectiveCamera(45,window.innerWidth/window.innerHeight,1,500)).position.set(0,0,100),camera.lookAt(0,0,0),(scene=new THREE.Scene).background=null;for(var t=-5*(mW-1)/2,r=-5*(mH-1)/2,n=-5*(mD-1)/2,i=0;i<mW;i++)for(var o=0;o<mH;o++)for(var l=0;l<mD;l++){const e=new THREE.SphereGeometry(1,32,16),c=new THREE.MeshBasicMaterial,a=new THREE.Mesh(e,c);a.position.set(t+5*i,r+5*o,n+5*l),scene.add(a)}}let d=6;var a=1;for(i=0;i<mW;i++)for(o=0;o<mH;o++)for(l=0;l<mD;l++)a<scene.children.length&&(scene.children[a].material.color=new THREE.Color(""+e[3*a+d]/255,""+e[3*a+d+1]/255,""+e[3*a+d+2]/255)),a++;scene.rotation.x+=.01,scene.rotation.y+=.01,renderer.render(scene,camera)}}try{ws=top.window.ws}catch(e){}ws&&ws.readyState===WebSocket.OPEN?ws.send("{'lv':true}"):(ws=new WebSocket(("https:"==window.location.protocol?"wss":"ws")+"://"+document.location.host+"/ws")).onopen=()=>{ws.send("{'lv':true}")},ws.binaryType="arraybuffer",ws.addEventListener("message",e=>{try{if("[object ArrayBuffer]"===toString.call(e.data)){let e=new Uint8Array(event.data);if(76!=e[0])return;updatePreview(e)}}catch(e){console.error("Peek WS error:",e)}})
 </script></body></html>)=====";
 
 

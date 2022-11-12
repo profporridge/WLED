@@ -119,7 +119,7 @@ void sendDataWs(AsyncWebSocketClient * client)
     }
     serializeJson(doc, (char *)buffer->get(), len +1);
     releaseJSONBufferLock();
-  } 
+  }
   if (client) {
     client->text(buffer);
   } else {
@@ -127,7 +127,7 @@ void sendDataWs(AsyncWebSocketClient * client)
   }
 }
 
-#define MAX_LIVE_LEDS_WS 256
+#define MAX_LIVE_LEDS_WS 1024 //WLEDSR: support 32x32 matrices max
 
 bool sendLiveLedsWs(uint32_t wsClient)
 {
@@ -136,14 +136,35 @@ bool sendLiveLedsWs(uint32_t wsClient)
 
   uint16_t used = strip.getLengthTotal();
   uint16_t n = ((used -1)/MAX_LIVE_LEDS_WS) +1; //only serve every n'th LED if count over MAX_LIVE_LEDS_WS
-  AsyncWebSocketMessageBuffer * wsBuf = ws.makeBuffer(2 + (used*3)/n);
+  uint16_t bufSize = 6 + (used/n)*3;
+  AsyncWebSocketMessageBuffer * wsBuf = ws.makeBuffer(bufSize);
   if (!wsBuf) return false; //out of memory
   uint8_t* buffer = wsBuf->get();
   buffer[0] = 'L';
   buffer[1] = 1; //version
+  buffer[2] = strip.stripOrMatrixPanel; //1D, 2D or 3D
+  buffer[3] = strip.matrixWidth; //WLEDSR: send width and height
+  buffer[4] = strip.matrixHeight; //WLEDSR: send width and height
+  buffer[5] = 1; //WLEDSR 
+  buffer[6] = currentPreset;
+  buffer[7] = currentPlaylist;
 
-  uint16_t pos = 2;
-  for (uint16_t i= 0; i < used; i += n)
+  if (strip.stripOrMatrixPanel == 2) { //3D
+    uint16_t matrixWidth = strip.matrixWidth;
+    //workaround to get width, height and depth
+    //balance dimensions
+    while (matrixWidth > buffer[4]) { //width > heigth
+      if (buffer[4] < buffer[5])
+        buffer[4] ++; //height ++
+      else
+        buffer[5] ++; //depth ++
+      matrixWidth =  strip.matrixWidth / buffer[4] / buffer[5];
+    }
+    buffer[3] = matrixWidth;
+  }
+
+  uint16_t pos = 8;
+  for (uint16_t i= 0; pos < bufSize - 2; i += n)
   {
     uint32_t c = strip.getPixelColor(i);
     buffer[pos++] = qadd8(W(c), R(c)); //R, add white channel to RGB channels as a simple RGBW -> RGB map

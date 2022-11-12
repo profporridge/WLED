@@ -22,7 +22,7 @@ extern const PROGMEM ConnectorLocalInfo applicationInfo;  // defines the app inf
 
 // Global variables that need exporting
 
-extern GxEPD2__270<GxEPD2_270, GxEPD2_270::HEIGHT> display;
+extern GxEPD2_BW<GxEPD2_270, GxEPD2_270::HEIGHT> display;
 extern AdaColorGfxMenuConfig gfxConfig;
 extern AdaFruitGfxMenuRenderer renderer;
 

@@ -2,6 +2,8 @@
 
 #include "palettes.h"
 
+#include <Esp.h>
+
 /*
  * JSON API (De)serialization
  */
@@ -95,7 +97,7 @@ void deserializeSegment(JsonObject elem, byte it, byte presetId)
   if (stop > start && of > len -1) of = len -1;
   strip.setSegment(id, start, stop, grp, spc, of);
 
-  byte segbri = 0;
+  byte segbri = seg.opacity;
   if (getVal(elem["bri"], &segbri)) {
     if (segbri > 0) seg.setOpacity(segbri, id);
     seg.setOption(SEG_OPTION_ON, segbri, id);
@@ -273,8 +275,8 @@ void deserializeSegment(JsonObject elem, byte it, byte presetId)
     }
     strip.setPixelSegment(oldSegId);
     strip.trigger();
-  } else if (!elem["frz"] && iarr.isNull()) { //return to regular effect
-    seg.setOption(SEG_OPTION_FREEZE, false);
+//  } else if (!elem["frz"] && iarr.isNull()) { //return to regular effect
+//    seg.setOption(SEG_OPTION_FREEZE, false);
   }
   // send UDP if not in preset and something changed that is not just selection
   //if (!presetId && (seg.differs(prev) & 0x7F)) stateChanged = true;
@@ -288,12 +290,23 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
 {
   bool stateResponse = root[F("v")] | false;
 
+  bool onBefore = bri;
   getVal(root["bri"], &bri);
+  getVal(root["inputLevel"], &inputLevel); //WLEDSR
 
   bool on = root["on"] | (bri > 0);
   if (!on != !bri) toggleOnOff();
 
   if (root["on"].is<const char*>() && root["on"].as<const char*>()[0] == 't') toggleOnOff();
+
+  if (bri && !onBefore) { // unfreeze all segments when turning on
+    for (uint8_t s=0; s < strip.getMaxSegments(); s++) {
+      strip.getSegment(s).setOption(SEG_OPTION_FREEZE, false, s);
+    }
+    if (realtimeMode && !realtimeOverride && useMainSegmentOnly) { // keep live segment frozen if live
+      strip.getMainSegment().setOption(SEG_OPTION_FREEZE, true, strip.getMainSegmentId());
+    }
+  }
 
   int tr = -1;
   if (!presetId || currentPlaylist < 0) { //do not apply transition time from preset if playlist active, as it would override playlist transition times
@@ -320,8 +333,8 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
 
   JsonObject nl       = root["nl"];
   nightlightActive    = nl["on"]      | nightlightActive;
-  nightlightDelayMins = nl["dur"]  | nightlightDelayMins;
-  nightlightMode      = nl["mode"] | nightlightMode;
+  nightlightDelayMins = nl["dur"]     | nightlightDelayMins;
+  nightlightMode      = nl["mode"]    | nightlightMode;
   nightlightTargetBri = nl[F("tbri")] | nightlightTargetBri;
 
   JsonObject udpn      = root["udpn"];
@@ -337,22 +350,24 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
 
   doReboot = root[F("rb")] | doReboot;
 
+  strip.setMainSegmentId(root[F("mainseg")] | strip.getMainSegmentId()); // must be before realtimeLock() if "live"
+
   realtimeOverride = root[F("lor")] | realtimeOverride;
   if (realtimeOverride > 2) realtimeOverride = REALTIME_OVERRIDE_ALWAYS;
-
-  bool liveEnabled = false;
-  if (root.containsKey("live")) {
-    bool lv = root["live"];
-    if (lv) {
-      transitionDelayTemp = 0;
-      jsonTransitionOnce = true;
-      liveEnabled = true; // triggers realtimeLock() below
-      realtimeLock(65000);
-    }
-    else realtimeTimeout = 0; //cancel realtime mode immediately
+  if (realtimeMode && useMainSegmentOnly) {
+    strip.getMainSegment().setOption(SEG_OPTION_FREEZE, !realtimeOverride, strip.getMainSegmentId());
   }
 
-  strip.setMainSegmentId(root[F("mainseg")] | strip.getMainSegmentId());
+  // bool liveEnabled = false; (to suppress warning)
+  if (root.containsKey("live")) {
+    if (root["live"].as<bool>()) {
+      transitionDelayTemp = 0;
+      jsonTransitionOnce = true;
+      realtimeLock(65000);
+    } else {
+      exitRealtime();
+    }
+  }
 
   int it = 0;
   JsonVariant segVar = root["seg"];
@@ -426,7 +441,6 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
   }
 
   stateUpdated(callMode);
-  if (liveEnabled) realtimeTimeout = UINT32_MAX; // force indefinite timeout if this request contained {"live":true}
 
   return stateResponse;
 }
@@ -468,16 +482,16 @@ void serializeSegment(JsonObject& root, WS2812FX::Segment& seg, byte id, bool fo
   strcat(colstr, "]");
   root["col"] = serialized(colstr);
 
-	root["fx"]  = seg.mode;
+	root["fx"]     = seg.mode;
 	root[F("sx")]  = seg.speed;
 	root[F("ix")]  = seg.intensity;
   root[F("c1x")] = seg.custom1;
   root[F("c2x")] = seg.custom2;
   root[F("c3x")] = seg.custom3;
-	root["pal"] = seg.palette;
+	root["pal"]    = seg.palette;
 	root[F("sel")] = seg.isSelected();
-	root["rev"] = seg.getOption(SEG_OPTION_REVERSED);
-	root["rev2D"] = seg.getOption(SEG_OPTION_REVERSED2D);
+	root["rev"]    = seg.getOption(SEG_OPTION_REVERSED);
+	root["rev2D"]  = seg.getOption(SEG_OPTION_REVERSED2D);
   root[F("mi")]  = seg.getOption(SEG_OPTION_MIRROR);
   root[F("rot2D")]  = seg.getOption(SEG_OPTION_ROTATED2D);
 }
@@ -487,6 +501,7 @@ void serializeState(JsonObject root, bool forPreset, bool includeBri, bool segme
   if (includeBri) {
     root["on"] = (bri > 0);
     root["bri"] = briLast;
+    root["inputLevel"] = inputLevel; //WLEDSR
     root[F("transition")] = transitionDelay/100; //in 100ms
   }
 
@@ -551,6 +566,9 @@ int getSignalQuality(int rssi)
     return quality;
 }
 
+extern char audioStatusInfo[7][24];   // WLEDSR
+extern void usermod_updateInfo(void); // WLEDSR
+
 void serializeInfo(JsonObject root)
 {
   root[F("ver")] = versionString;
@@ -575,6 +593,9 @@ void serializeInfo(JsonObject root)
     lcarr.add(lc);
   }
 
+  //WLEDSR
+  leds[F("somp")] = strip.stripOrMatrixPanel;
+
   leds["lc"] = totalLC;
 
   leds[F("rgbw")] = strip.hasRGBWBus(); // deprecated, use info.leds.lc
@@ -586,6 +607,8 @@ void serializeInfo(JsonObject root)
   root[F("name")] = serverDescription;
   root[F("udpport")] = udpPort;
   root["live"] = (bool)realtimeMode;
+  root[F("liveseg")] = useMainSegmentOnly ? strip.getMainSegmentId() : -1;  // if using main segment only for live
+  //root[F("mso")] = useMainSegmentOnly;  // using main segment only for live
 
   switch (realtimeMode) {
     case REALTIME_MODE_INACTIVE: root["lm"] = ""; break;
@@ -653,10 +676,55 @@ void serializeInfo(JsonObject root)
   #endif
 
   root[F("freeheap")] = ESP.getFreeHeap();
-  #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_PSRAM)
-  if (psramFound()) root[F("psram")] = ESP.getFreePsram();
+  
+  // begin WLEDSR
+  usermod_updateInfo();   // small hack -> request status from soundreactive. Result are on audioStatusInfo.
+  if (strlen(audioStatusInfo[0]) >0 ) {
+    root[F("audioType")]   = audioStatusInfo[0];
+    root[F("audioStatus")] = audioStatusInfo[1];
+    if (strlen(audioStatusInfo[2]) >0 ) root[F("audioGain")] = audioStatusInfo[2];
+    root[F("ssyncMode")]   = audioStatusInfo[3];
+    root[F("ssyncStatus")] = audioStatusInfo[4];
+#ifdef WLED_DEBUG
+    root[F("audioProcess")]= audioStatusInfo[5];
+#endif
+    if (strlen(audioStatusInfo[6]) >0 ) root[F("audioWarning")] = audioStatusInfo[6];
+  }
+  
+  root[F("totalheap")] = ESP.getHeapSize(); //WLEDSR
+  root[F("minfreeheap")] = ESP.getMinFreeHeap();
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_PSRAM) && defined(BOARD_HAS_PSRAM)
+  if (psramFound()) {
+    root[F("psram")] = ESP.getFreePsram();
+    root[F("tpram")] = ESP.getPsramSize(); //WLEDSR
+    root[F("psusedram")] = ESP.getMinFreePsram();
+  }  
   #endif
+  #ifdef ARDUINO_ARCH_ESP32
+  static char msgbuf[32];
+  snprintf(msgbuf, sizeof(msgbuf)-1, "%s rev.%d", ESP.getChipModel(), ESP.getChipRevision());
+  root[F("e32model")] = msgbuf;
+  root[F("e32cores")] = ESP.getChipCores();
+  root[F("e32speed")] = ESP.getCpuFreqMHz();
+  root[F("e32flash")] = int((ESP.getFlashChipSize()/1024)/1024);
+  root[F("e32flashspeed")] = int(ESP.getFlashChipSpeed()/1000000);
+  root[F("e32flashmode")] = int(ESP.getFlashChipMode());
+  switch (ESP.getFlashChipMode()) {
+    // missing: Octal modes
+    case FM_QIO:  root[F("e32flashtext")] = F(" (QIO)"); break;
+    case FM_QOUT: root[F("e32flashtext")] = F(" (QOUT)");break;
+    case FM_DIO:  root[F("e32flashtext")] = F(" (DIO?)"); break;         // due to bugs in arduino-esp32, this info is not always correct
+    case FM_DOUT: root[F("e32flashtext")] = F(" (DOUT or other)");break; // due to bugs in arduino-esp32, this info is not reliable
+    default: root[F("e32flashtext")] = F(" (other)"); break;
+  }
+  #endif
+
+  // end WLEDSR
+
   root[F("uptime")] = millis()/1000 + rolloverMillis*4294967;
+
+  //WLEDSR
+  root[F("soundAgc")] = soundAgc;
 
   usermods.addToJsonInfo(root);
 

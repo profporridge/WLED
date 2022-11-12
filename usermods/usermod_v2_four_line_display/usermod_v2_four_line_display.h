@@ -137,7 +137,6 @@ class FourLineDisplayUsermod : public Usermod {
   private:
 
     bool initDone = false;
-    bool enabled = true;
     unsigned long lastTime = 0;
 
     // HW interface & configuration
@@ -159,6 +158,7 @@ class FourLineDisplayUsermod : public Usermod {
     bool clockMode = false;         // display clock
     bool forceAutoRedraw = false;         // WLEDSR: force rotating of variables in display, even if strip.isUpdating, this can cause led stutter, this should not be necessary if display is fast enough...
     bool noAutoRedraw = false;         // WLEDSR: never do auto Redraw, only when variable changes or rotary is pressed (in case redraw causes stutter on leds, should not be needed with spi displays)
+    bool enabled = true;
 
     // Next variables hold the previous known values to determine if redraw is
     // required.
@@ -226,6 +226,11 @@ class FourLineDisplayUsermod : public Usermod {
         isHW = (ioPin[0]==HW_PIN_SCL && ioPin[1]==HW_PIN_SDA);
         PinManagerPinType pins[2] = { { ioPin[0], true }, { ioPin[1], true } };
         if (ioPin[0]==HW_PIN_SCL && ioPin[1]==HW_PIN_SDA) po = PinOwner::HW_I2C;  // allow multiple allocations of HW I2C bus pins
+#ifdef ARDUINO_ARCH_ESP32
+        isHW = true;  // WLEDSR - always use hardware I2C in ESP32
+        po = PinOwner::HW_I2C;
+#endif
+        if ((ioPin[0] < 0) || (ioPin[1] <0)) { type=NONE; return; } // WLEDSR bugfix: avoid crash due to invalid PINS
         if (!pinManager.allocateMultiplePins(pins, 2, po)) { type=NONE; return; }
       }
 
@@ -1048,7 +1053,7 @@ class FourLineDisplayUsermod : public Usermod {
         setFlipMode(flip);
         if (needsRedraw && !wakeDisplay()) redraw(true);
       }
-      // use "return !top["newestParameter"].isNull();" when updating Usermod with new features
+      // use "return !top["newestParameter"].isNull();" when updating Usermod with new features (or return false during development)
       return !top[FPSTR(_enabled)].isNull();
     }
 
