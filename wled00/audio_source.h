@@ -51,11 +51,6 @@
 #define I2S_MIC_CHANNEL_TEXT "left channel only."
 #endif
 
-#ifndef MCLK_PIN
-    int mclkPin = 0;
-#else
-    int mclkPin = MLCK_PIN;
-#endif
 
 #ifndef ES7243_ADDR
     int addr_ES7243 = 0x13;
@@ -181,13 +176,13 @@ public:
 
         esp_err_t err = i2s_driver_install(I2S_NUM_0, &_config, 0, nullptr);
         if (err != ESP_OK) {
-            Serial.printf("Failed to install i2s driver: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to install i2s driver: %d\n", err);
             return;
         }
 
         err = i2s_set_pin(I2S_NUM_0, &_pinConfig);
         if (err != ESP_OK) {
-            Serial.printf("Failed to set i2s pin config: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to set i2s pin config: %d\n", err);
             return;
         }
 
@@ -199,7 +194,7 @@ public:
             AudioSource<T>::_initialized = false;
         esp_err_t err = i2s_driver_uninstall(I2S_NUM_0);
         if (err != ESP_OK) {
-            Serial.printf("Failed to uninstall i2s driver: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to uninstall i2s driver: %d\n", err);
             return;
         }}
         pinManager.deallocatePin(i2swsPin, PinOwner::DigitalMic);
@@ -222,13 +217,13 @@ public:
             // get fresh samples
             err = i2s_read(I2S_NUM_0, (void *)newSamples, sizeof(newSamples), &bytes_read, portMAX_DELAY);
             if ((err != ESP_OK)){
-                Serial.printf("Failed to get samples: %d\n", err);
+                if (serialTxAvaileable) Serial.printf("Failed to get samples: %d\n", err);
                 return;
             }
 
             // For correct operation, we need to read exactly sizeof(samples) bytes from i2s
             if(bytes_read != sizeof(newSamples)) {
-                Serial.printf("Failed to get enough samples: wanted: %d read: %d\n", sizeof(newSamples), bytes_read);
+                if (serialTxAvaileable) Serial.printf("Failed to get enough samples: wanted: %d read: %d\n", sizeof(newSamples), bytes_read);
                 return;
             }
 
@@ -240,7 +235,7 @@ public:
                     I2S_datatype sampleNoFilter = decodeADCsample(rawData);
                     if (AudioSource<T>::_broken_samples_counter >= num_samples-1) {             // kill-switch: ADC sample correction off when all samples in a batch were "broken"
                         AudioSource<T>::_myADCchannel = 0x0F;
-                        Serial.println("AS: too many broken audio samples from ADC - sample correction switched off.");
+                        if (serialTxAvaileable) Serial.println("AS: too many broken audio samples from ADC - sample correction switched off.");
                     }
 
                     newSamples[i] = (3 * sampleNoFilter + AudioSource<T>::_lastADCsample) / 4;  // apply low-pass filter (2-tap FIR)
@@ -326,6 +321,10 @@ public:
     virtual void initialize() {
         // Reserve the master clock pin
         if(!pinManager.allocatePin(mclkPin, true, PinOwner::DigitalMic)) {
+            return;
+        }
+        if ((mclkPin != GPIO_NUM_0) && (mclkPin != GPIO_NUM_1) && (mclkPin != GPIO_NUM_3)) {
+            if (serialTxAvaileable) Serial.printf("Failed to set gpio %d as i2s MCLK pin. Only GPIO0, GPIO1 or GPIO3 are possible on ESP32\n", mclkPin);
             return;
         }
         _routeMclk();
@@ -449,12 +448,14 @@ public:
         for (int b=0; b<WLED_MAX_BUTTONS; b++) {
             //if ((btnPin[b] >= 0) && (buttonType[b] == BTN_TYPE_ANALOG || buttonType[b] == BTN_TYPE_ANALOG_INVERTED) && (digitalPinToAnalogChannel(btnPin[b]) < 10)) {
             if ((btnPin[b] >= 0) && (buttonType[b] == BTN_TYPE_ANALOG || buttonType[b] == BTN_TYPE_ANALOG_INVERTED) && (digitalPinToAnalogChannel(btnPin[b]) >= 0)) {
+              if (serialTxAvaileable) {
                 Serial.println("AS: Analog Microphone does not work reliably when analog buttons are configured on ADC1.");
                 Serial.printf( "    Button %d GPIO %d\n", b, btnPin[b]);
                 Serial.println("    To recover, please disable any analog button in LED preferences, then restart your device.");
                 Serial.flush();
+              }
 #ifdef I2S_GRAB_ADC1_COMPLETELY
-                Serial.println("AS: Analog Microphone initialization aborted. Cannot use ADC1 exclusively");
+                if (serialTxAvaileable) Serial.println("AS: Analog Microphone initialization aborted. Cannot use ADC1 exclusively");
                 return;
 #endif
             }
@@ -466,7 +467,7 @@ public:
         // Determine Analog channel. Only Channels on ADC1 are supported
         int8_t channel = digitalPinToAnalogChannel(audioPin);
         if ((channel < 0) || (channel > 9)) {  // channel == -1 means "not an ADC pin"
-            Serial.printf("Incompatible GPIO used for audio in: %d\n", audioPin);
+            if (serialTxAvaileable) Serial.printf("Incompatible GPIO used for audio in: %d\n", audioPin);
             return;
         } else {
             adc_gpio_init(ADC_UNIT_1, adc_channel_t(channel));
@@ -478,7 +479,7 @@ public:
         i2s_config_t config = (i2s_config_t)(I2SSource<T>::_config);
         esp_err_t err = i2s_driver_install(I2S_NUM_0, &config, 0, nullptr);
         if (err != ESP_OK) {
-            Serial.printf("Failed to install i2s driver: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to install i2s driver: %d\n", err);
             return;
         }
 
@@ -487,7 +488,7 @@ public:
         // Enable I2S mode of ADC
         err = i2s_set_adc_mode(ADC_UNIT_1, adc1_channel_t(channel));
         if (err != ESP_OK) {
-            Serial.printf("Failed to set i2s adc mode: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to set i2s adc mode: %d\n", err);
             return;
 
         }
@@ -500,14 +501,14 @@ public:
         // fingers crossed
         err = i2s_adc_enable(I2S_NUM_0);
         if (err != ESP_OK) {
-            Serial.printf("Failed to enable i2s adc: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to enable i2s adc: %d\n", err);
             //return;
         }
 #else
         //err = i2s_adc_disable(I2S_NUM_0); // seems that disable without previous enable causes a crash/bootloop on some boards
 		//err = i2s_stop(I2S_NUM_0);
         if (err != ESP_OK) {
-            Serial.printf("Failed to initially disable i2s adc: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to initially disable i2s adc: %d\n", err);
         }
 #endif
         AudioSource<T>::_initialized = true;
@@ -523,7 +524,7 @@ public:
 			//esp_err_t err = i2s_start(I2S_NUM_0);
             esp_err_t err = i2s_adc_enable(I2S_NUM_0);
             if (err != ESP_OK) {
-                Serial.printf("Failed to enable i2s adc: %d\n", err);
+                if (serialTxAvaileable) Serial.printf("Failed to enable i2s adc: %d\n", err);
                 return;
             }
 #endif
@@ -533,7 +534,7 @@ public:
             err = i2s_adc_disable(I2S_NUM_0);
 			//err = i2s_stop(I2S_NUM_0);
             if (err != ESP_OK) {
-                Serial.printf("Failed to disable i2s adc: %d\n", err);
+                if (serialTxAvaileable) Serial.printf("Failed to disable i2s adc: %d\n", err);
                 return;
             }
 #endif
@@ -545,12 +546,12 @@ public:
        
         esp_err_t err; if (AudioSource<T>::_initialized) {
          AudioSource<T>::_initialized = false;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(I2S_GRAB_ADC1_COMPLETELY)
         // according to docs from espressif, the ADC needs to be stopped explicitly
         // fingers crossed
         err = i2s_adc_disable(I2S_NUM_0);
         if (err != ESP_OK) {
-            Serial.printf("Failed to disable i2s adc: %d\n", err);
+            if (serialTxAvaileable) Serial.printf("Failed to disable i2s adc: %d\n", err);
             //return;
         }
 #endif
@@ -558,7 +559,7 @@ public:
             i2s_stop(I2S_NUM_0);
             err = i2s_driver_uninstall(I2S_NUM_0);
             if (err != ESP_OK) {
-                Serial.printf("Failed to uninstall i2s driver: %d\n", err);
+                if (serialTxAvaileable) Serial.printf("Failed to uninstall i2s driver: %d\n", err);
                 return;
             }
         }
