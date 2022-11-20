@@ -40,9 +40,11 @@ void userSetup() {
   if ((pinManager.isPinAllocated(hardwareTX)) && (pinManager.getPinOwner(hardwareTX) == PinOwner::DebugOut)) serialTxAvaileable = true;  // TX availeable for debug
   if ((dmType > 0) && ((i2ssdPin == hardwareTX) || (i2swsPin == hardwareTX) || (i2sckPin == hardwareTX))) serialTxAvaileable = false;    // i2S pin == TX (stupid but possible ...)
 
+  useBandPassFilter = false;
   // initialize I2S input
   switch (dmType) {
     case 1:
+      //useBandPassFilter = true;
       if (serialTxAvaileable) {
         Serial.print("AS: Generic I2S Microphone - "); Serial.println(I2S_MIC_CHANNEL_TEXT);
       }
@@ -63,16 +65,18 @@ void userSetup() {
       if (serialTxAvaileable) {
       Serial.print("Digital microphone is present. - "); Serial.println(I2S_MIC_CHANNEL_TEXT);
       }
-      audioSource = new I2SSourceWithMasterClock<float>(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
+      audioSource = new I2SSourceWithMasterClock<float>(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF, 1.0f/24.0f);
       break;
     case 5:
+      useBandPassFilter = true;
       if (serialTxAvaileable) {
         Serial.print("AS: I2S PDM Microphone - "); Serial.println(I2S_MIC_CHANNEL_TEXT);
       }
-      audioSource = new I2SPdmSource<float>(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF);
+      audioSource = new I2SPdmSource<float>(SAMPLE_RATE, BLOCK_SIZE, 0, 0xFFFFFFFF, 1.0f/4.0f);
       break;
     case 0:
     default:
+      //useBandPassFilter = true;
       if (serialTxAvaileable) Serial.println("AS: Analog Microphone (left channel only).");
       audioSource = new I2SAdcSource<float>(SAMPLE_RATE, BLOCK_SIZE, 0, 0x0FFF);
       break;

@@ -53,9 +53,9 @@
 
 
 #ifndef ES7243_ADDR
-    int addr_ES7243 = 0x13;
+    static int addr_ES7243 = 0x13;
 #else
-    int addr_ES7243 =  ES7243_ADDR;
+    static int addr_ES7243 =  ES7243_ADDR;
 #endif
 
 #ifndef ES7243_SDAPIN
@@ -65,9 +65,9 @@
 #endif
 
 #ifndef ES7243_SDAPIN
-    int pin_ES7243_SCL = 23;
+    static int pin_ES7243_SCL = 23;
 #else
-    int pin_ES7243_SCL =  ES7243_SCLPIN;
+    static int pin_ES7243_SCL =  ES7243_SCLPIN;
 #endif
 
 /* Interface class
@@ -111,8 +111,11 @@ public:
 
 protected:
     // Private constructor, to make sure it is not callable except from derived classes
-    AudioSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) : _sampleRate(sampleRate), _blockSize(blockSize), _sampleNoDCOffset(0), _dcOffset(0.0f), _shift(lshift), _mask(mask), 
-                _initialized(false), _myADCchannel(0x0F), _lastADCsample(0), _broken_samples_counter(0) {};
+    AudioSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask, float sampleScale) : 
+        _sampleRate(sampleRate), _blockSize(blockSize), _sampleNoDCOffset(0), _dcOffset(0.0f), 
+        _shift(lshift), _mask(mask), _sampleScale(sampleScale), 
+        _initialized(false), _myADCchannel(0x0F), _lastADCsample(0), _broken_samples_counter(0) 
+    {};
 
     int _sampleRate;                /* Microphone sampling rate (from uint16_t to int to suppress warning)*/ 
     int _blockSize;                 /* I2S block size */
@@ -120,6 +123,7 @@ protected:
     float _dcOffset;                /* Rolling average DC offset */
     int16_t _shift;                /* Shift obtained samples to the right (positive) or left(negative) by this amount */
     uint32_t _mask;                 /* Bitmask for sample data after shifting. Bitmask 0X0FFF means that we need to convert 12bit ADC samples from unsigned to signed*/
+    float _sampleScale;             // pre-scaling factor for I2S samples
     bool _initialized;              /* Gets set to true if initialization is successful */
     int8_t _myADCchannel;           /* current ADC channel, in case of analog input. 0x0F if undefined */
     I2S_datatype _lastADCsample;    /* last sample from ADC */
@@ -134,8 +138,8 @@ protected:
 template <typename T>
 class I2SSource : public AudioSource<T> {
 public:
-    I2SSource<T>(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        AudioSource<T>(sampleRate, blockSize, lshift, mask) {
+    I2SSource<T>(int sampleRate, int blockSize, int16_t lshift, uint32_t mask, float sampleScale = 1.0f) :
+        AudioSource<T>(sampleRate, blockSize, lshift, mask, sampleScale) {
         _config = {
             .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
             .sample_rate = AudioSource<T>::_sampleRate,                       // "narrowing conversion" warning can be ignored here - our _sampleRate is never bigger that INT32_MAX
@@ -152,6 +156,9 @@ public:
         };
 
         _pinConfig = {
+            #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+            .mck_io_num = I2S_PIN_NO_CHANGE, // needed, otherwise i2s_set_pin() will fail in IDF >=4.4.x
+            #endif
             .bck_io_num = i2sckPin,
             .ws_io_num = i2swsPin,
             .data_out_num = I2S_PIN_NO_CHANGE,
@@ -164,15 +171,22 @@ public:
     virtual void initialize() {
 
         if (!pinManager.allocatePin(i2swsPin, true, PinOwner::DigitalMic) ||
-            !pinManager.allocatePin(i2ssdPin, false, PinOwner::DigitalMic)) {
+            !pinManager.allocatePin(i2ssdPin, false, PinOwner::DigitalMic) ||
+            (i2ssdPin < 0) || (i2swsPin < 0)) {
+                if (serialTxAvaileable) Serial.printf("Failed to set I2S GPIO pins: SD=%d WS=%d \n", i2ssdPin, i2swsPin);
                 return;
         }
 
         // i2ssckPin needs special treatment, since it might be unused on PDM mics
         if (i2sckPin != -1) {
             if (!pinManager.allocatePin(i2sckPin, true, PinOwner::DigitalMic))
+                if (serialTxAvaileable) Serial.printf("Failed to allocate I2S GPIO pin: SCK=%d \n", i2sckPin);
                 return;
         }
+
+        #if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+        if (ESP.getChipRevision() == 0) _config.use_apll = false; // APLL is broken on ESP32 revision 0, so we disable it on rev0 chips
+        #endif
 
         esp_err_t err = i2s_driver_install(I2S_NUM_0, &_config, 0, nullptr);
         if (err != ESP_OK) {
@@ -261,7 +275,8 @@ public:
                     currSample = (T) newSamples[i];
 #endif
                 }
-                buffer[i] = currSample;
+                buffer[i] = currSample;                                   // store sample
+                buffer[i] *= _sampleScale;                                // scale sample
                 AudioSource<T>::_dcOffset = ((AudioSource<T>::_dcOffset * 31) + currSample) / 32;
             }
 
@@ -314,8 +329,8 @@ protected:
 template <typename T>
 class I2SSourceWithMasterClock : public I2SSource<T> {
 public:
-    I2SSourceWithMasterClock(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource<T>(sampleRate, blockSize, lshift, mask) {
+    I2SSourceWithMasterClock(int sampleRate, int blockSize, int16_t lshift, uint32_t mask, float sampleScale = 1.0f) :
+        I2SSource<T>(sampleRate, blockSize, lshift, mask, sampleScale) {
     };
 
     virtual void initialize() {
@@ -325,6 +340,10 @@ public:
         }
         if ((mclkPin != GPIO_NUM_0) && (mclkPin != GPIO_NUM_1) && (mclkPin != GPIO_NUM_3)) {
             if (serialTxAvaileable) Serial.printf("Failed to set gpio %d as i2s MCLK pin. Only GPIO0, GPIO1 or GPIO3 are possible on ESP32\n", mclkPin);
+            return;
+        }
+        if (i2sckPin < 0) {
+            if (serialTxAvaileable) Serial.printf("Failed to set gpio %d as i2s SCK pin.\n", i2sckPin);
             return;
         }
         _routeMclk();
@@ -373,7 +392,8 @@ private:
         Wire.beginTransmission(addr_ES7243);
         Wire.write((uint8_t)reg);
         Wire.write((uint8_t)val);
-        Wire.endTransmission();
+        uint8_t i2cErr = Wire.endTransmission();  // i2cErr == 0 means OK
+        if ((i2cErr != 0) && serialTxAvaileable) Serial.printf("ES7243: I2C write failed with error=%d  (reg 0x%X, val 0x%X).\n", i2cErr, reg, val);
     }
 
     void _es7243InitAdc() {
@@ -388,11 +408,15 @@ private:
 
 public:
 
-    ES7243(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSourceWithMasterClock<T>(sampleRate, blockSize, lshift, mask) {
+    ES7243(int sampleRate, int blockSize, int16_t lshift, uint32_t mask, float sampleScale = 1.0f) :
+        I2SSourceWithMasterClock<T>(sampleRate, blockSize, lshift, mask, sampleScale) {
         I2SSource<T>::_config.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
     };
     void initialize() {
+        if ((pin_ES7243_SDA < 0) || (pin_ES7243_SCL < 0)) {
+            if (serialTxAvaileable) Serial.printf("ES7243: invalid i2c GPIO pins: SDA=%d SCL=%d \n", pin_ES7243_SDA, pin_ES7243_SCL);
+            return;
+        }
         // Reserve SDA and SCL pins of the I2C interface
         if (!pinManager.allocatePin(pin_ES7243_SDA, true, PinOwner::DigitalMic) ||
             !pinManager.allocatePin(pin_ES7243_SCL, true, PinOwner::DigitalMic)) {
@@ -421,8 +445,8 @@ public:
 template <typename T>
 class I2SAdcSource : public I2SSource<T> {
 public:
-    I2SAdcSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource<T>(sampleRate, blockSize, lshift, mask){
+    I2SAdcSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask, float sampleScale = 1.0f) :
+        I2SSource<T>(sampleRate, blockSize, lshift, mask, sampleScale){
         I2SSource<T>::_config = {
             .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN),
             .sample_rate = AudioSource<T>::_sampleRate,                       // "narrowing conversion" warning can be ignored here - our _sampleRate is never bigger that INT32_MAX
@@ -578,7 +602,7 @@ class SPH0654 : public I2SSource<T> {
 
 public:
     SPH0654(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource<T>(sampleRate, blockSize, lshift, mask){}
+        I2SSource(sampleRate, blockSize, lshift, mask){}
 
     void initialize() {
         I2SSource<T>::initialize();
@@ -597,12 +621,16 @@ template <typename T>
 class I2SPdmSource : public I2SSource <T>{
 
 public:
-    I2SPdmSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource<T>(sampleRate, blockSize, lshift, mask) {
+    I2SPdmSource(int sampleRate, int blockSize, int16_t lshift, uint32_t mask, float sampleScale = 1.0f) :
+        I2SSource<T>(sampleRate, blockSize, lshift, mask, sampleScale) {
 
         I2SSource<T>::_config.mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); // Change mode to pdm
+        I2SSource<T>::_config.use_apll = 1;
 
         I2SSource<T>::_pinConfig = {
+            #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+            .mck_io_num = I2S_PIN_NO_CHANGE, // needed, otherwise i2s_set_pin() will fail in IDF >=4.4.x
+            #endif
             .bck_io_num = I2S_PIN_NO_CHANGE, // bck is unused in PDM mics
             .ws_io_num = i2swsPin, // clk pin for PDM mic
             .data_out_num = I2S_PIN_NO_CHANGE,
