@@ -276,7 +276,7 @@ public:
 #endif
                 }
                 buffer[i] = currSample;                                   // store sample
-                buffer[i] *= _sampleScale;                                // scale sample
+                buffer[i] *= AudioSource<T>::_sampleScale;                                // scale sample
                 AudioSource<T>::_dcOffset = ((AudioSource<T>::_dcOffset * 31) + currSample) / 32;
             }
 
@@ -602,7 +602,7 @@ class SPH0654 : public I2SSource<T> {
 
 public:
     SPH0654(int sampleRate, int blockSize, int16_t lshift, uint32_t mask) :
-        I2SSource(sampleRate, blockSize, lshift, mask){}
+        I2SSource<T>(sampleRate, blockSize, lshift, mask){}
 
     void initialize() {
         I2SSource<T>::initialize();

@@ -38,9 +38,9 @@
 
 // Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
 // is used in I2Cdev.h
-//#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
 #include <Wire.h>
-//#endif
+#endif
 #include "m5stickc.h"
 //#include "m5stick-spectrum.h"
 #define M5STICKC_LCD
@@ -96,7 +96,7 @@ public:
     tftSprite.setRotation(1);
     // M5.Axp.EnableCoulombcounter();
 #ifndef USE_M5_LCD
-    M5.Lcd.setRotation(1);
+    M5.Lcd.setRotation(0);
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setTextColor(TFT_WHITE);
     M5.Lcd.setTextSize(1);
