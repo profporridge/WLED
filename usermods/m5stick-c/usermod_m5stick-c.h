@@ -41,7 +41,7 @@
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
 #include <Wire.h>
 #endif
-#include "m5stickc.h"
+#include <M5StickC.h>
 //#include "m5stick-spectrum.h"
 #define M5STICKC_LCD
 #define UPDATE_INTERVAL_MILLIS = 100
@@ -93,15 +93,15 @@ public:
 #endif
 
     tftSprite.createSprite(160, 50);
-    tftSprite.setRotation(1);
+    tftSprite.setRotation(0);
     // M5.Axp.EnableCoulombcounter();
-#ifndef USE_M5_LCD
-    M5.Lcd.setRotation(0);
+//#ifndef USE_M5_LCD
+    M5.Lcd.setRotation(1);
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setTextColor(TFT_WHITE);
     M5.Lcd.setTextSize(1);
     M5.Axp.SetLDO2(true);
-#endif
+//#endif
     avgVCurr = M5.Axp.GetVBusCurrent();
     avgVBatt = M5.Axp.GetBatVoltage();
     //i2sInit();
@@ -204,7 +204,7 @@ uint32_t lastUpdateTime=0;
       tftSprite.printf("Power %.3fmw (%.1f/%.1fms)", M5.Axp.GetBatPower(), avgUpdateTimeA, avgUpdateTimeB);
       tftSprite.pushSprite(0, 0);
     
-#ifndef USE_M5_LCD
+//#ifndef USE_M5_LCD
 #ifdef M5STICKC_LCD
 
 #ifdef AXP_DEBUG
@@ -253,7 +253,7 @@ uint32_t lastUpdateTime=0;
     {
       needRedraw = true;
     }
-    else if (knownMode != strip.getMode())
+    else if (knownMode != strip.getSegment(0).mode)
     {
       needRedraw = true;
     }
@@ -289,7 +289,7 @@ uint32_t lastUpdateTime=0;
 #endif
     knownIp = apActive ? IPAddress(4, 3, 2, 1) : WiFi.localIP();
     knownBrightness = bri;
-    knownMode = strip.getMode();
+    knownMode = strip.getSegment(0).mode;
     knownPalette = strip.getSegment(0).palette;
 
     // First row with Wifi name
@@ -339,7 +339,7 @@ uint32_t lastUpdateTime=0;
         break;
       }
     }
-#endif
+//#endif
     // Fourth row with palette name
     // M5.Lcd.setCursor(2, 3);
     // qComma = 0;
