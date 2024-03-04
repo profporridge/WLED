@@ -776,6 +776,16 @@ void Segment::deletejMap() {
   }
 }
 
+
+// WLEDMM constants for mapping mode "Pinwheel"
+constexpr int Pinwheel_Steps_Medium = 208;     // no holes up to 32x32;  60fps
+constexpr int Pinwheel_Size_Medium = 32;       // larger than this -> use "Big"
+constexpr int Pinwheel_Steps_Big = 360;        // no holes expected up to  58x58; 40fps
+constexpr float Int_to_Rad_Med = (DEG_TO_RAD * 360) / Pinwheel_Steps_Medium;   // conversion: from 0...208 to Radians
+constexpr float Int_to_Rad_Big = (DEG_TO_RAD * 360) / Pinwheel_Steps_Big;      // conversion: from 0...360 to Radians
+// WLEDMM end
+
+
 // 1D strip
 uint16_t Segment::virtualLength() const {
 #ifndef WLED_DISABLE_2D
@@ -804,6 +814,13 @@ uint16_t Segment::virtualLength() const {
           vLen = max(vW,vH) * 4;//0.5; // get the longest dimension
         else 
           vLen = max(vW,vH) * 0.5; // get the longest dimension
+        break;
+      case M12_sPinWheel: //WLEDMM
+        //vLen = full circle
+        if (max(vW,vH) <= Pinwheel_Size_Medium) 
+          vLen = Pinwheel_Steps_Medium;
+        else 
+          vLen = Pinwheel_Steps_Big;
         break;
     }
     return vLen;
@@ -872,13 +889,26 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
         else {
           //WLEDMM: drawArc(0, 0, i, col); could work as alternative
 
-          float step = HALF_PI / (2.85f*i);
-          for (float rad = 0.0f; rad <= HALF_PI+step/2; rad += step) {
+          //WLEDMM: some optimizations for the drawing loop
+          //  pre-calculate loop limits, exploit symmetry at 45deg
+          float radius = float(i);
+          // float step = HALF_PI / (2.85f * radius);  // upstream uses this
+          float step = HALF_PI / (M_PI * radius);      // WLEDMM we use the correct circumference
+          bool useSymmetry = (max(vH, vW) > 20);       // for segments wider than 20 pixels, we exploit symmetry
+          unsigned numSteps;
+          if (useSymmetry) numSteps = 1 + ((HALF_PI/2.0f + step/2.0f) / step); // with symmetry
+          else             numSteps = 1 + ((HALF_PI      + step/2.0f) / step); // without symmetry
+
+          float rad = 0.0f;
+          for (unsigned count = 0; count < numSteps; count++) {
             // may want to try float version as well (with or without antialiasing)
-            int x = roundf(sin_t(rad) * i);
-            int y = roundf(cos_t(rad) * i);
+            int x = roundf(sinf(rad) * radius);
+            int y = roundf(cosf(rad) * radius);
             setPixelColorXY(x, y, col);
+            if(useSymmetry) setPixelColorXY(y, x, col);// WLEDMM
+            rad += step;
           }
+
           // Bresenham’s Algorithm (may not fill every pixel)
           //int d = 3 - (2*i);
           //int y = i, x = 0;
@@ -906,8 +936,8 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
       case M12_sCircle: //WLEDMM
         if (vStrip > 0)
         {
-          int x = roundf(sin_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
-          int y = roundf(cos_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int x = roundf(sinf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int y = roundf(cosf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
           setPixelColorXY(x + vW/2, y + vH/2, col);
         }
         else // pArc -> circle
@@ -932,6 +962,38 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
           }
         }
         break;
+      case M12_sPinWheel: { // WLEDMM
+        // i = angle --> 0 through 359 (Big), OR 0 through 208 (Medium)
+        float centerX = roundf((vW-1) / 2.0f);
+        float centerY = roundf((vH-1) / 2.0f);
+        // int maxDistance = sqrt(centerX * centerX + centerY * centerY) + 1;
+        float angleRad = (max(vW,vH) > Pinwheel_Size_Medium) ? float(i) * Int_to_Rad_Big : float(i) * Int_to_Rad_Med; // angle in radians
+        float cosVal = cosf(angleRad);
+        float sinVal = sinf(angleRad);
+
+        // draw line at angle, starting at center and ending at the segment edge
+        // we use fixed point math for better speed. Starting distance is 0.5 for better rounding
+        constexpr int_fast32_t Fixed_Scale = 512;  // fixpoint scaling factor
+        int_fast32_t posx = (centerX + 0.5f * cosVal) * Fixed_Scale; // X starting position in fixed point
+        int_fast32_t posy = (centerY + 0.5f * sinVal) * Fixed_Scale; // Y starting position in fixed point
+        int_fast16_t inc_x = cosVal * Fixed_Scale; // X increment per step (fixed point)
+        int_fast16_t inc_y = sinVal * Fixed_Scale; // Y increment per step (fixed point)
+
+        int32_t maxX = vW * Fixed_Scale; // X edge in fixedpoint
+        int32_t maxY = vH * Fixed_Scale; // Y edge in fixedpoint
+        // draw until we hit any edge
+        while ((posx > 0) && (posy > 0) && (posx < maxX)  && (posy < maxY))  {
+          // scale down to integer (compiler will replace division with appropriate bitshift)
+          int x = posx / Fixed_Scale;
+          int y = posy / Fixed_Scale;
+          // set pixel
+          setPixelColorXY(x, y, col);
+          // advance to next position
+          posx += inc_x;
+          posy += inc_y;
+        }
+        break;
+      }
     }
     return;
   } else if (Segment::maxHeight!=1 && (width()==1 || height()==1)) {
@@ -1052,8 +1114,8 @@ uint32_t Segment::getPixelColor(int i)
       case M12_sCircle: //WLEDMM
         if (vStrip > 0)
         {
-          int x = roundf(sin_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
-          int y = roundf(cos_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int x = roundf(sinf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int y = roundf(cosf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
           return getPixelColorXY(x + vW/2, y + vH/2);
         }
         else
@@ -1069,6 +1131,15 @@ uint32_t Segment::getPixelColor(int i)
         else
           return getPixelColorXY(vW / 2, vH / 2 - i - 1);
         break;
+      case M12_sPinWheel: //WLEDMM
+      // not 100% accurate, returns outer edge of circle
+        float distance = max(1.0f, min(vH-1, vW-1) / 2.0f);
+        float centerX = (vW - 1) / 2.0f;
+        float centerY = (vH - 1) / 2.0f;
+        float angleRad = (max(vW,vH) > Pinwheel_Size_Medium) ? float(i) * Int_to_Rad_Big : float(i) * Int_to_Rad_Med; // angle in radians
+        int x = roundf(centerX + distance * cosf(angleRad));
+        int y = roundf(centerY + distance * sinf(angleRad));
+        return getPixelColorXY(x, y);
     }
     return 0;
   }
@@ -1424,7 +1495,7 @@ void WS2812FX::enumerateLedmaps() {
   ledmapMaxSize = 0;
   ledMaps = 1;
   for (int i=1; i<10; i++) {
-    char fileName[33];
+    char fileName[33] = {'\0'};       // WLEDMM ensure termination
     snprintf_P(fileName, sizeof(fileName), PSTR("/ledmap%d.json"), i);
     bool isFile = WLED_FS.exists(fileName);
 
@@ -1615,6 +1686,8 @@ void WS2812FX::waitUntilIdle(void) {
 
 void WS2812FX::service() {
   unsigned long nowUp = millis(); // Be aware, millis() rolls over every 49 days // WLEDMM avoid losing precision
+  if (OTAisRunning) return; // WLEDMM avoid flickering during OTA
+
   now = nowUp + timebase;
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_FASTPATH)
     if ((_frametime > 2) && (_frametime < 32) && (nowUp - _lastShow) < (_frametime/2)) return;  // WLEDMM experimental - stabilizes frametimes but increases CPU load
@@ -1776,6 +1849,8 @@ void WS2812FX::estimateCurrentAndLimitBri() {
 }
 
 void WS2812FX::show(void) {
+  if (OTAisRunning) return; // WLEDMM avoid flickering during OTA
+
   // avoid race condition, capture _callback value
   show_callback callback = _callback;
   if (callback) callback();
@@ -2234,7 +2309,7 @@ void WS2812FX::loadCustomPalettes() {
 bool WS2812FX::deserializeMap(uint8_t n) {
   // 2D support creates its own ledmap (on the fly) if a ledmap.json exists it will overwrite built one.
 
-  char fileName[32];
+  char fileName[32] = {'\0'};
   //WLEDMM: als support segment name ledmaps
   bool isFile = false;;
   if (n<10) {
@@ -2286,13 +2361,17 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
   if (isMatrix) {
     //WLEDMM: read width and height
+    memset(fileName, 0, sizeof(fileName));              // clear old buffer - readBytesUntil() does not terminate strings !!!
     f.find("\"width\":");
     f.readBytesUntil('\n', fileName, sizeof(fileName)); //hack: use fileName as we have this allocated already
-    uint16_t maxWidth = atoi(fileName);
+    uint16_t maxWidth = atoi(cleanUpName(fileName));
+    //DEBUG_PRINTF(" (\"width\": %s) ", fileName)
 
+    memset(fileName, 0, sizeof(fileName));              // clear old buffer
     f.find("\"height\":");
     f.readBytesUntil('\n', fileName, sizeof(fileName));
-    uint16_t maxHeight = atoi(fileName);
+    uint16_t maxHeight = atoi(cleanUpName(fileName));
+    //DEBUG_PRINTF(" (\"height\": %s) \n", fileName)
 
     //WLEDMM: support ledmap file properties width and height: if found change segment
     if (maxWidth * maxHeight > 0) {
@@ -2327,20 +2406,23 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
   if (customMappingTable != nullptr) {
     customMappingSize  = Segment::maxWidth * Segment::maxHeight;
+    // WLEDMM reset mapping table before loading
+    //memset(customMappingTable, 0xFF, customMappingTableSize * sizeof(uint16_t)); // FFFF = no pixel
+    for (unsigned i=0; i<customMappingTableSize; i++) customMappingTable[i]=i;     // "neutral" 1:1 mapping
 
     //WLEDMM: find the map values
     f.find("\"map\":[");
     uint16_t i=0;
     do { //for each element in the array
       int mapi = f.readStringUntil(',').toInt();
-      // USER_PRINTF(", %d", mapi);
-      customMappingTable[i++] = (uint16_t) (mapi<0 ? 0xFFFFU : mapi);
+      // USER_PRINTF(", %d(%d)", mapi, i);
+      if (i < customMappingSize) customMappingTable[i++] = (uint16_t) (mapi<0 ? 0xFFFFU : mapi);  // WLEDMM do not write past array bounds
     } while (f.available());
 
     loadedLedmap = n;
     f.close();
 
-    USER_PRINTF("Custom ledmap: %d\n", loadedLedmap);
+    USER_PRINTF("Custom ledmap: %d size=%d\n", loadedLedmap, customMappingSize);
     #ifdef WLED_DEBUG_MAPS
       for (uint16_t j=0; j<customMappingSize; j++) { // fixing a minor warning: declaration of 'i' shadows a previous local
         if (!(j%Segment::maxWidth)) DEBUG_PRINTLN();

@@ -103,7 +103,7 @@
 #define USERMOD_ID_ROTARY_ENC_UI          8     //Usermod "usermod_v2_rotary_encoder_ui.h"
 #define USERMOD_ID_AUTO_SAVE              9     //Usermod "usermod_v2_auto_save.h"
 #define USERMOD_ID_DHT                   10     //Usermod "usermod_dht.h"
-#define USERMOD_ID_MODE_SORT             11     //Usermod "usermod_v2_mode_sort.h"
+// #define USERMOD_ID_MODE_SORT             11     //Usermod "usermod_v2_mode_sort.h"
 #define USERMOD_ID_VL53L0X               12     //Usermod "usermod_vl53l0x_gestures.h"
 #define USERMOD_ID_MULTI_RELAY           13     //Usermod "usermod_multi_relay.h"
 #define USERMOD_ID_ANIMATED_STAIRCASE    14     //Usermod "Animated_Staircase.h"
@@ -344,6 +344,7 @@
 #define ERR_OVERTEMP    30  // An attached temperature sensor has measured above threshold temperature (not implemented)
 #define ERR_OVERCURRENT 31  // An attached current sensor has measured a current above the threshold (not implemented)
 #define ERR_UNDERVOLT   32  // An attached voltmeter has measured a voltage below the threshold (not implemented)
+#define ERR_LOW_MEM     33  // low memory (RAM)
 
 // Timer mode types
 #define NL_MODE_SET               0            //After nightlight time elapsed, set to target brightness
