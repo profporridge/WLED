@@ -7,9 +7,14 @@
 //#define WIRE_INTERFACES_COUNT 2 // experimental - tell U8x8Lib that there is a second Wire unit
 
 #include "wled.h"
+//#ifndef TTGO_TDISPLAY_S3
 #include <U8x8lib.h> // from https://github.com/olikraus/u8g2/
+//#endif
 #include "4LD_wled_fonts.c"
-
+#ifdef TTGO_TDISPLAY_S3
+#include "TFT_eSPI.h"
+#include "U8g2_for_TFT_eSPI.h"
+#endif
 #ifndef FLD_ESP32_NO_THREADS
   #define FLD_ESP32_USE_THREADS  // comment out to use 0.13.x behaviour without parallel update task - slower, but more robust. May delay other tasks like LEDs or audioreactive!!
 #endif
@@ -84,8 +89,10 @@
 static TaskHandle_t Display_Task = nullptr;
 void DisplayTaskCode(void * parameter);
 #endif
-
-
+#ifdef TTGO_TDISPLAY_S3
+TFT_eSPI tft = TFT_eSPI();   // tft instance
+U8g2_for_TFT_eSPI u8f;       // U8g2 font instance
+#endif
 typedef enum {
   NONE = 0,
   SSD1306,      // U8X8_SSD1306_128X32_UNIVISION_HW_I2C
@@ -95,10 +102,13 @@ typedef enum {
   SSD1305_64,   // U8X8_SSD1305_128X64_ADAFRUIT_HW_I2C
   SSD1306_SPI,     // U8X8_SSD1306_128X32_NONAME_HW_SPI
   SSD1306_SPI64=7, // U8X8_SSD1306_128X64_NONAME_HW_SPI
+
   SSD1309_SPI64=8, // U8X8_SSD1309_128X64_NONAME0_4W_HW_SPI
   SSD1327_SPI128=9,// U8X8_SSD1327_WS_128X128_4W_SW_SPI
+    TFT_WRAPPER=11,  // wrapper for tft
   SSD1309_64=10 // U8X8_SSD1309_128X64_NONAME2_HW_I2C
 } DisplayType;
+
 
 
 class FourLineDisplayUsermod : public Usermod {
@@ -118,7 +128,28 @@ class FourLineDisplayUsermod : public Usermod {
     char errorMessage[100] = ""; //WLEDMM: show error in um settings if occurred
 
     // HW interface & configuration
-    U8X8 *u8x8 = nullptr;           // pointer to U8X8 display object
+    #ifdef TTGO_TDISPLAY_S3
+    U8g2_for_TFT_eSPI *u8x8 = nullptr;           // pointer to U8X8 display object
+    #else
+    U8X8 *u8x8 = nullptr;
+    #endif
+
+#if defined(ARDUINO_ARCH_ESP32) && defined(FLD_ESP32_USE_THREADS)
+    // semaphores - needed on ESP32 only, as we use a separate task to update the display
+    SemaphoreHandle_t drawMux = xSemaphoreCreateBinary();      // for drawstring and drawglyph functions (to prevent concurrent access to HW)
+    SemaphoreHandle_t drawMuxBig = xSemaphoreCreateBinary();   // for draw2x2GlyphIcons() and showCurrentEffectOrPalette() - more complex and not thread-safe
+    const TickType_t maxWait =     300 * portTICK_PERIOD_MS;   // wait max. 300ms (drawstring semaphore)
+    const TickType_t maxWaitLong = 800 * portTICK_PERIOD_MS;   // wait max. 800ms (big drawing semaphore)
+    #define FLD_SemaphoreTake(x,t)  xSemaphoreTake((x),(t))
+    #define FLD_SemaphoreGive(x)    xSemaphoreGive(x)
+#else
+    // 8266 or no tasks - no semaphores
+    #define FLD_SemaphoreTake(x,t) pdTRUE
+    #define FLD_SemaphoreGive(x)
+    #if !defined(ARDUINO_ARCH_ESP32) && !defined(pdTRUE)
+      #define pdTRUE true
+    #endif
+#endif
 
     #ifndef FLD_SPI_DEFAULT
     int8_t ioPin[5] = {FLD_PIN_SCL, FLD_PIN_SDA, -1, -1, -1};        // I2C pins: SCL, SDA
@@ -190,7 +221,10 @@ class FourLineDisplayUsermod : public Usermod {
     static const char _showSeconds[];
     static const char _busClkFrequency[];
     static const char _contrastFix[];
-
+#ifdef TTGO_TDISPLAY_S3
+    TFT_eSPI tft = TFT_eSPI();   // tft instance
+    U8g2_for_TFT_eSPI u8f;       // U8g2 font instance
+#endif
     // If display does not work or looks corrupted check the
     // constructor reference:
     // https://github.com/olikraus/u8g2/wiki/u8x8setupcpp
@@ -204,6 +238,7 @@ class FourLineDisplayUsermod : public Usermod {
         case SSD1306_SPI64: // falls thru
         case SSD1309_SPI64: // falls thru
         case SSD1327_SPI128:
+        case TFT_WRAPPER:
           return true;  // yes its SPI
           break; // makes compiler happy
         default: 
@@ -740,6 +775,15 @@ void FourLineDisplayUsermod::setup() {
   }
 */
   switch (type) {
+        case TFT_WRAPPER:
+        #ifdef TTGO_TDISPLAY_S3
+          tft.begin();
+          tft.setRotation(0);
+          tft.fillScreen(BLACK);
+         // u8f.begin();
+         #endif
+          break;
+          
     case SSD1306:
       if (!isHW) u8x8 = (U8X8 *) new U8X8_SSD1306_128X32_UNIVISION_SW_I2C(ioPin[0], ioPin[1]); // SCL, SDA, reset
       else       u8x8 = (U8X8 *) new U8X8_SSD1306_128X32_UNIVISION_HW_I2C(U8X8_PIN_NONE, ioPin[0], ioPin[1]); // Pins are Reset, SCL, SDA

@@ -10,6 +10,9 @@
  * \/ \/ \/
  */
 //#include "../usermods/EXAMPLE_v2/usermod_v2_example.h"
+#ifdef USERMOD_TTGO_EINK
+  #include "../usermods/TTGO-eink/ttgo-eink.h"
+#endif
 
 #ifdef USERMOD_BATTERY
 #include "../usermods/Battery/usermod_v2_Battery.h"
@@ -166,7 +169,7 @@
 #endif
 
 #ifdef USERMOD_KLIPPER_PERCENTAGE
-#include "..\usermods\usermod_v2_klipper_percentage\usermod_v2_klipper_percentage.h"
+  #include "../usermods/usermod_v2_klipper_percentage/usermod_v2_klipper_percentage.h"
 #endif
 
 #ifdef USERMOD_BOBLIGHT
@@ -275,7 +278,10 @@ void registerUsermods()
 #ifdef USERMOD_AUTO_SAVE
   usermods.add(new AutoSaveUsermod());  // can use USERMOD_FOUR_LINE_DISPLAY
 #endif
-
+  
+  #ifdef USERMOD_TTGO_EINK
+  usermods.add(new ttgo_eink());
+  #endif
 #ifdef USERMOD_DHT
   usermods.add(new UsermodDHT());
 #endif

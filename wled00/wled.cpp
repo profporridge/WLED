@@ -382,6 +382,23 @@ void WLED::loop()
     ESP.wdtFeed();
   #endif
 #endif
+
+#if 0 && defined(ALL_JSON_TO_PSRAM) && defined(WLED_USE_PSRAM_JSON)
+// WLEDMM experiment - JSON garbagecollect once per minute. Warning: may crash at random
+  static unsigned long last_gc_time = 0;
+  // try once in 60 seconds
+  if ((millis() - last_gc_time) > 60000) {
+    // look for a perfect moment -> make sure no strip or segments or presets activity, no configs being updated, no realtime external control
+    if (!suspendStripService && !doInitBusses && !doReboot && !doCloseFile && !realtimeMode && !loadLedmap && !presetsActionPending()) {
+      // make sure JSON buffer is not in use
+      if ( (doSerializeConfig == false) && (jsonBufferLock == 0) && (fileDoc == nullptr)) {
+        USER_PRINTLN(F("JSON gabage collection (regular)."));
+        doc.garbageCollect();                   // WLEDMM experimental - trigger garbage collection on JSON doc memory pool.
+                                                // this will make any pending reference to JSON objects _invalid_
+        last_gc_time = millis();
+  } } }
+#endif
+
 }
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_FASTPATH)
@@ -434,6 +451,10 @@ void WLED::setup()
   if (!Serial) delay(2500);  // WLEDMM allow CDC USB serial to initialise
   #endif
   #if ARDUINO_USB_CDC_ON_BOOT || ARDUINO_USB_MODE
+    #if ARDUINO_USB_CDC_ON_BOOT && (defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6))
+    //  WLEDMM avoid "hung devices" when USB_CDC is enabled; see https://github.com/espressif/arduino-esp32/issues/9043
+    Serial.setTxTimeoutMs(0);    // potential side-effect: incomplete debug output, with missing characters whenever TX buffer is full.
+    #endif
   if (!Serial) delay(2500);  // WLEDMM: always allow CDC USB serial to initialise
   if (Serial) Serial.println("wait 1");  // waiting a bit longer ensures that a  debug messages are shown in serial monitor
   if (!Serial) delay(2500);
@@ -565,12 +586,12 @@ void WLED::setup()
   pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
   #elif defined(CONFIG_IDF_TARGET_ESP32S2)
   // S2: reserve GPIO 26-32 for PSRAM (may fail due to isPinOk() but that will also prevent other allocation)
-  managed_pin_type pins[] = { {26, true}, {27, true}, {28, true}, {29, true}, {30, true}, {31, true}, {32, true} };
-  pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
+  //managed_pin_type pins[] = { {26, true}, {27, true}, {28, true}, {29, true}, {30, true}, {31, true}, {32, true} };
+  //pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
   #elif defined(CONFIG_IDF_TARGET_ESP32C3)
   // C3: reserve GPIO 12-17 for PSRAM (may fail due to isPinOk() but that will also prevent other allocation)
-  managed_pin_type pins[] = { {12, true}, {13, true}, {14, true}, {15, true}, {16, true}, {17, true} };
-  pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
+  //managed_pin_type pins[] = { {12, true}, {13, true}, {14, true}, {15, true}, {16, true}, {17, true} };
+  //pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
   #else
   // GPIO16/GPIO17 reserved for SPI RAM
   managed_pin_type pins[] = { {16, true}, {17, true} };
@@ -606,6 +627,11 @@ pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), Pin
   if(dmxEnablePin > 0) pinManager.allocatePin(dmxEnablePin, true, PinOwner::DMX);
 #endif
 
+#if defined(ALL_JSON_TO_PSRAM) && defined(WLED_USE_PSRAM_JSON)
+  USER_PRINTLN(F("JSON gabage collection (initial)."));
+  doc.garbageCollect();   // WLEDMM experimental - this seems to move the complete doc[] into PSRAM
+#endif
+
 // WLEDMM experimental: support for single neoPixel on Adafruit boards
 #if 0
   //#ifdef PIN_NEOPIXEL
@@ -635,7 +661,7 @@ pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), Pin
   for (uint8_t i=1; i<WLED_MAX_BUTTONS; i++) btnPin[i] = -1;
 
   bool fsinit = false;
-  USER_PRINTLN(F("Mount FS"));
+  USER_PRINTLN(F("Mounting FS ..."));
 #ifdef ARDUINO_ARCH_ESP32
   fsinit = WLED_FS.begin(true);
 #else
@@ -644,6 +670,8 @@ pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), Pin
   if (!fsinit) {
     USER_PRINTLN(F("Mount FS failed!"));  // WLEDMM
     errorFlag = ERR_FS_BEGIN;
+  } else {
+      USER_PRINTLN(F("Mount FS succeeded.")); // WLEDMM
   }
 #ifdef WLED_ADD_EEPROM_SUPPORT
   else deEEP();
@@ -1005,7 +1033,7 @@ void WLED::initConnection()
 
   WiFi.disconnect(true);        // close old connections
 #ifdef ESP8266
-  WiFi.setPhyMode(WIFI_PHY_MODE_11N);
+  WiFi.setPhyMode(force802_3g ? WIFI_PHY_MODE_11G : WIFI_PHY_MODE_11N);
 #endif
 
   if (staticIP[0] != 0 && staticGateway[0] != 0) {
@@ -1176,16 +1204,19 @@ void WLED::handleConnection()
   #ifdef ARDUINO_ARCH_ESP32 
   // reconnect WiFi to clear stale allocations if heap gets too low
   if (now - heapTime > 5000) { // WLEDMM: updated with better logic for small heap available by block, not total.
-    // uint32_t heap = ESP.getFreeHeap();
+#if defined(ARDUINO_ARCH_ESP32S2)
+    uint32_t heap = ESP.getFreeHeap(); // WLEDMM works better on -S2
+#else
     uint32_t heap = heap_caps_get_largest_free_block(0x1800); // WLEDMM: This is a better metric for free heap.
+#endif
     if (heap < MIN_HEAP_SIZE && lastHeap < MIN_HEAP_SIZE) {
-      DEBUG_PRINT(F("Heap too low! (step 2, force reconnect): "));
-      DEBUG_PRINTLN(heap);
+      USER_PRINT(F("Heap too low! (step 2, force reconnect): "));
+      USER_PRINTLN(heap);
       forceReconnect = true;
       strip.purgeSegments(true); // remove all but one segments from memory
     } else if (heap < MIN_HEAP_SIZE) {
-      DEBUG_PRINT(F("Heap too low! (step 1, flush unread UDP): "));
-      DEBUG_PRINTLN(heap);      
+      USER_PRINT(F("Heap too low! (step 1, flush unread UDP): "));
+      USER_PRINTLN(heap);      
       strip.purgeSegments();
       notifierUdp.flush();
       rgbUdp.flush();
@@ -1313,7 +1344,15 @@ void WLED::handleStatusLED()
   if (ledStatusType) {
     if (millis() - ledStatusLastMillis >= (1000/ledStatusType)) {
       ledStatusLastMillis = millis();
-      ledStatusState = !ledStatusState;
+#if 0
+      // WLEDMM un-comment this to stop the blinking
+      if ((ledStatusType != 2) && (ledStatusType != 4))
+        ledStatusState = !ledStatusState;
+      else
+        ledStatusState = HIGH;
+#else
+        ledStatusState = !ledStatusState;
+#endif
       #if STATUSLED>=0
       digitalWrite(STATUSLED, ledStatusState);
       #else

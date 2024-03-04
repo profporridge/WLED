@@ -82,7 +82,10 @@ void strip_wait_until_idle(String whoCalledMe) {
   }
 #endif
 }
-
+// WLEDMM another helper for segment class
+bool strip_uses_global_leds(void) {
+  return strip.useLedsArray;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Segment class implementation
@@ -201,12 +204,14 @@ Segment& Segment::operator= (Segment &&orig) noexcept {
 }
 
 bool Segment::allocateData(size_t len) {
-  if (data && _dataLen >= len) {
-    if (call == 0) memset(data, 0, len); // WLEDMM: clear data when SEGENV.call==0
-    return true; //already allocated
+  // WLEDMM
+  if (data && _dataLen >= len) {                          // already allocated enough (reduce fragmentation)
+    if ((call == 0) && (len > 0)) memset(data, 0, len);   // erase buffer if called during effect initialisation
+    return true;
   }
   //DEBUG_PRINTF("allocateData(%u) start %d, stop %d, vlen %d\n", len, start, stop, virtualLength());
   deallocateData();
+  if (len == 0) return false; // nothing to do
   if (Segment::getUsedSegmentData() + len > MAX_SEGMENT_DATA) return false; //not enough memory
   // do not use SPI RAM on ESP32 since it is slow
   //#if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
@@ -271,7 +276,7 @@ void Segment::setUpLeds() {
 }
 
 CRGBPalette16 &Segment::loadPalette(CRGBPalette16 &targetPalette, uint8_t pal) {
-  static unsigned long _lastPaletteChange = 0; // perhaps it should be per segment
+  static unsigned long _lastPaletteChange = millis() - 990000; // perhaps it should be per segment //WLEDMM changed init value to avoid pure orange after startup
   static CRGBPalette16 randomPalette = CRGBPalette16(DEFAULT_COLOR);
   static CRGBPalette16 prevRandomPalette = CRGBPalette16(CRGB(BLACK));
   byte tcp[76] = { 255 };   //WLEDMM: prevent out-of-range access in loadDynamicGradientPalette()
@@ -411,22 +416,25 @@ void Segment::startTransition(uint16_t dur) {
 }
 
 // transition progression between 0-65535
-uint16_t Segment::progress() {
+uint16_t IRAM_ATTR_YN Segment::progress() {
   if (!transitional || !_t) return 0xFFFFU;
   unsigned long timeNow = millis();
   if (timeNow - _t->_start > _t->_dur || _t->_dur == 0) return 0xFFFFU;
   return (timeNow - _t->_start) * 0xFFFFU / _t->_dur;
 }
 
-uint8_t Segment::currentBri(uint8_t briNew, bool useCct) {
-  uint32_t prog = progress();
+// WLEDMM Segment::currentBri() is declared inline, see FX.h
+#if 0
+uint8_t IRAM_ATTR_YN Segment::currentBri(uint8_t briNew, bool useCct) {
+  uint32_t prog = (transitional && _t) ? progress() : 0xFFFFU;
   if (transitional && _t && prog < 0xFFFFU) {
     if (useCct) return ((briNew * prog) + _t->_cctT * (0xFFFFU - prog)) >> 16;
     else        return ((briNew * prog) + _t->_briT * (0xFFFFU - prog)) >> 16;
   } else {
-    return briNew;
+    return (useCct ? briNew : (on ? briNew : 0));  // WLEDMM aligned with upstream
   }
 }
+#endif
 
 uint8_t Segment::currentMode(uint8_t newMode) {
   return (progress()>32767U) ? newMode : _t->_modeP; // change effect in the middle of transition

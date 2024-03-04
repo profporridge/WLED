@@ -404,7 +404,7 @@
   #if !defined(USERMOD_AUDIOREACTIVE)
     #define SETTINGS_STACK_BUF_SIZE 3834   // WLEDMM added 696+32 bytes of margin (was 3096)
   #else
-    #define SETTINGS_STACK_BUF_SIZE 3904   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #define SETTINGS_STACK_BUF_SIZE 4000   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
   #endif
 #endif
 
@@ -448,7 +448,7 @@
     #if defined(ARDUINO_ARCH_ESP32C3)
       #define JSON_BUFFER_SIZE 44000 // WLEDMM - max 44KB on -C3 with PSRAM (chip has 400kb RAM)
     #else
-      #define JSON_BUFFER_SIZE 32000 // WLEDMM - max 32KB on -S2 with PSRAM (chip has 320kb RAM)
+      #define JSON_BUFFER_SIZE 28000 // WLEDMM - max 28KB on -S2 with PSRAM (chip has 320kb RAM)
     #endif
   #else
   #define JSON_BUFFER_SIZE 54000 // WLEDMM (was 60000) slightly reduced to avoid build error "region dram0_0_seg overflowed"
@@ -471,7 +471,7 @@
 //this is merely a default now and can be changed at runtime
 #ifndef LEDPIN
 
-#if defined(ESP8266) || (defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_PSRAM)) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ARDUINO_ESP32_PICO)
+#if defined(ESP8266) || (defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM)) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ARDUINO_ESP32_PICO)  //WLEDMM
   #define LEDPIN 2    // GPIO2 (D4) on Wemos D1 mini compatible boards, and on boards where GPIO16 is not available
 #else
   #define LEDPIN 16   // aligns with GPIO2 (D4) on Wemos D1 mini32 compatible boards

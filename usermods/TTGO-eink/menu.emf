@@ -1,0 +1,137 @@
+{
+  "lastEdited": {
+    "seconds": 1611049309,
+    "nanos": 0
+  },
+  "codeOptions": {
+    "applicationUUID": "d4753f24-2948-4cad-a872-f3d756858246",
+    "applicationName": "WLED",
+    "lastInputUuid": "2a3ae3ba-05f4-4c9c-aad3-3ddc88df9049",
+    "lastDisplayUuid": "7c486068-9879-459f-89ee-9522366524a3",
+    "lastRemoteUuid": "2c101fec-1f7d-4ff3-8d2b-992ad41e7fcb",
+    "embeddedPlatform": "ARDUINO_ESP32",
+    "namingRecursive": false,
+    "saveToSrc": false,
+    "useCppMain": true,
+    "lastProperties": [
+      {
+        "name": "PULLUP_LOGIC",
+        "latestValue": "true",
+        "subsystem": "INPUT"
+      },
+      {
+        "name": "INTERRUPT_SWITCHES",
+        "latestValue": "false",
+        "subsystem": "INPUT"
+      },
+      {
+        "name": "SWITCH_IODEVICE",
+        "latestValue": "",
+        "subsystem": "INPUT"
+      },
+      {
+        "name": "ENCODER_UP_PIN",
+        "latestValue": "BUTTON_1",
+        "subsystem": "INPUT"
+      },
+      {
+        "name": "ENCODER_DOWN_PIN",
+        "latestValue": "BUTTON_2",
+        "subsystem": "INPUT"
+      },
+      {
+        "name": "ENCODER_OK_PIN",
+        "latestValue": "BUTTON_3",
+        "subsystem": "INPUT"
+      },
+      {
+        "name": "DISPLAY_VARIABLE",
+        "latestValue": "display",
+        "subsystem": "DISPLAY"
+      },
+      {
+        "name": "DISPLAY_TYPE",
+        "latestValue": "GxEPD2_GFX",
+        "subsystem": "DISPLAY"
+      },
+      {
+        "name": "DISPLAY_CONFIG",
+        "latestValue": "",
+        "subsystem": "DISPLAY"
+      },
+      {
+        "name": "DISPLAY_BUFFERED",
+        "latestValue": "true",
+        "subsystem": "DISPLAY"
+      }
+    ]
+  },
+  "projectName": "Menu for WLED",
+  "namingRecursive": false,
+  "version": "1.0",
+  "items": [
+    {
+      "parentId": 0,
+      "type": "analogItem",
+      "item": {
+        "name": "Brightness",
+        "eepromAddress": -1,
+        "id": 3,
+        "readOnly": false,
+        "localOnly": false,
+        "visible": true,
+        "functionName": "",
+        "maxValue": 255,
+        "offset": 0,
+        "divisor": 5,
+        "unitName": null
+      }
+    },
+    {
+      "parentId": 0,
+      "type": "rgbItem",
+      "item": {
+        "name": "Color",
+        "eepromAddress": -1,
+        "id": 4,
+        "readOnly": false,
+        "localOnly": false,
+        "visible": true,
+        "functionName": "UpdateColor",
+        "includeAlphaChannel": false
+      }
+    },
+    {
+      "parentId": 0,
+      "type": "enumItem",
+      "item": {
+        "name": "AudioSync",
+        "eepromAddress": -1,
+        "id": 5,
+        "readOnly": false,
+        "localOnly": false,
+        "visible": true,
+        "functionName": "UpdateAudio",
+        "enumEntries": [
+          "Transmit",
+          "Receive",
+          "Disabled"
+        ]
+      }
+    },
+    {
+      "parentId": 0,
+      "type": "runtimeList",
+      "item": {
+        "name": "Effects",
+        "eepromAddress": -1,
+        "id": 2,
+        "readOnly": false,
+        "localOnly": false,
+        "visible": true,
+        "functionName": "UpdateEffect",
+        "initialRows": 100
+      }
+    }
+  ]
+}

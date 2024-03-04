@@ -8,7 +8,10 @@
  */
 
 // version code in format yymmddb (b = daily build)
-#define VERSION 2312150
+#define VERSION 2401290
+
+// WLEDMM  - you can check for this define in usermods, to only enabled WLEDMM specific code in the "right" fork. Its not defined in AC WLED.
+#define _MoonModules_WLED_
 
 //WLEDMM + Moustachauve/Wled-Native 
 // You can define custom product info from build flags.
@@ -191,6 +194,7 @@ struct PSRAM_Allocator {
   }
 };
 using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator>;
+//#define DynamicJsonDocument PSRAMDynamicJsonDocument  // WLEDMM experiment
 #else
 #define PSRAMDynamicJsonDocument DynamicJsonDocument
 #endif
@@ -338,6 +342,7 @@ WLED_GLOBAL bool noWifiSleep _INIT(true);                          // disabling 
 #else
 WLED_GLOBAL bool noWifiSleep _INIT(false);
 #endif
+WLED_GLOBAL bool force802_3g _INIT(false);
 
 #ifdef WLED_USE_ETHERNET
   #ifdef WLED_ETH_DEFAULT                                          // default ethernet board type if specified
@@ -784,7 +789,17 @@ WLED_GLOBAL int8_t spi_sclk  _INIT(HW_PIN_CLOCKSPI);
 #endif
 
 // global ArduinoJson buffer
+#if defined(ALL_JSON_TO_PSRAM) && defined(WLED_USE_PSRAM_JSON)
+// WLEDMM experimental : always use dynamic JSON
+  #ifndef WLED_DEFINE_GLOBAL_VARS
+  WLED_GLOBAL PSRAMDynamicJsonDocument doc;
+  #else
+  WLED_GLOBAL PSRAMDynamicJsonDocument doc(JSON_BUFFER_SIZE);
+  #warning experimental - trying to always use dynamic JSON
+  #endif
+#else
 WLED_GLOBAL StaticJsonDocument<JSON_BUFFER_SIZE> doc;
+#endif // WLEDMM end
 WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
 
 // enable additional debug output
