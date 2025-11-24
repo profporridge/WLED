@@ -12,7 +12,7 @@ static volatile byte presetToApply = 0;
 static volatile byte callModeToApply = 0;
 static volatile byte presetToSave = 0;
 static volatile int8_t saveLedmap = -1;
-static char quickLoad[9];
+static char quickLoad[12]; // WLEDMM 9->12 to prevent crashing with unicode
 static char saveName[33];
 static bool includeBri = true, segBounds = true, selectedOnly = false, playlistSave = false;
 
@@ -88,8 +88,8 @@ static void doSaveState() {
   // clean up
   saveLedmap   = -1;
   presetToSave = 0;
-  saveName[0]  = '\0';
-  quickLoad[0] = '\0';
+  memset(saveName, '\0', sizeof(saveName));
+  memset(quickLoad,'\0', sizeof(quickLoad));
   playlistSave = false;
 }
 
@@ -228,19 +228,37 @@ void handlePresets()
 
   presetToApply = 0; //clear request for preset
   callModeToApply = 0;
+  byte presetErrorFlag = ERR_NONE;
 
   DEBUG_PRINT(F("Applying preset: "));
   DEBUG_PRINTLN(tmpPreset);
 
+  bool haveLocked = false;
+  #if defined(ARDUINO_ARCH_ESP32)   // WLEDMM we apply this workaround to all esp32 boards (S3 and classic esp32 included)
+  //#if defined(ARDUINO_ARCH_ESP32S2) || defined(ARDUINO_ARCH_ESP32C3)
+  // in case we are called from web UI, wait until strip.service() is done
+  if (!suspendStripService) { suspendStripService = true; haveLocked = true; } // only lock service if not locked already
+  unsigned long waitstart = millis();
+  while (strip.isServicing() && millis() - waitstart < FRAMETIME_FIXED) delay(1); // wait for effects to finish updating
+
+  strip.fill(BLACK); strip.show(); // experimental: set LEDs to black while new preset loads (instead of freezing effects)
+
+  unsigned long start = millis();
+  while (strip.isUpdating() && millis() - start < FRAMETIME_FIXED) delay(1); // wait for strip to finish updating, accessing FS during sendout causes glitches // WLEDMM delay instead of yield
+  #endif
+
   #ifdef ARDUINO_ARCH_ESP32
   if (tmpPreset==255 && tmpRAMbuffer!=nullptr) {
     deserializeJson(*fileDoc,tmpRAMbuffer);
-    errorFlag = ERR_NONE;
+    if ((errorFlag == ERR_FS_PLOAD) || (errorFlag == ERR_JSON)) errorFlag = ERR_NONE;  // WLEDMM only reset our own error
   } else
   #endif
   {
-  errorFlag = readObjectFromFileUsingId(filename, tmpPreset, fileDoc) ? ERR_NONE : ERR_FS_PLOAD;
+    presetErrorFlag = readObjectFromFileUsingId(filename, tmpPreset, fileDoc) ? ERR_NONE : ERR_FS_PLOAD;
+    if ((errorFlag == ERR_FS_PLOAD) || (errorFlag == ERR_JSON)) errorFlag = ERR_NONE;  // WLEDMM only reset our own error
+    if (presetErrorFlag == ERR_FS_PLOAD) errorFlag = presetErrorFlag;
   }
+  if (haveLocked) suspendStripService = false; // WLEDMM unlock effects after presets file was loaded
   fdo = fileDoc->as<JsonObject>();
 
   //HTTP API commands
@@ -258,7 +276,7 @@ void handlePresets()
       fdo.remove("ps"); // remove load request for presets to prevent recursive crash (if not called by button and contains preset cycling string "1~5~")
     deserializeState(fdo, CALL_MODE_NO_NOTIFY, tmpPreset); // may change presetToApply by calling applyPreset()
   }
-  if (!errorFlag && tmpPreset < 255 && changePreset) currentPreset = tmpPreset;
+  if (!presetErrorFlag && tmpPreset < 255 && changePreset) currentPreset = tmpPreset;
 
   #if defined(ARDUINO_ARCH_ESP32)
   //Aircoookie recommended not to delete buffer
@@ -288,7 +306,7 @@ void savePreset(byte index, const char* pname, JsonObject sObj)
 
   presetToSave = index;
   playlistSave = false;
-  if (sObj[F("ql")].is<const char*>()) strlcpy(quickLoad, sObj[F("ql")].as<const char*>(), 9); // client limits QL to 2 chars, buffer for 8 bytes to allow unicode
+  if (sObj[F("ql")].is<const char*>()) strlcpy(quickLoad, sObj[F("ql")].as<const char*>(), sizeof(quickLoad)); // client limits QL to 2 chars, buffer for 12 bytes to allow encoded unicode
 
   if (sObj.size()==0 || sObj["o"].isNull()) { // no "o" means not a playlist or custom API call, saving of state is async (not immediately)
     includeBri   = sObj["ib"].as<bool>() || sObj.size()==0 || index==255; // temporary preset needs brightness

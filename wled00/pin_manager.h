@@ -36,6 +36,7 @@ enum struct PinOwner : uint8_t {
   HW_I2C        = 0x8B,   // 'I2C'       == hardware I2C pins (4&5 on ESP8266, 21&22 on ESP32)
   HW_SPI        = 0x8C,   // 'SPI'       == hardware (V)SPI pins (13,14&15 on ESP8266, 5,18&23 on ESP32)
   DMX_INPUT     = 0x8D,   // 'DMX_INPUT' == DMX input via serial
+  HUB75         = 0x8E,   // 'Hub75' == Hub75 driver 
   // Use UserMod IDs from const.h here
   UM_Unspecified       = USERMOD_ID_UNSPECIFIED,        // 0x01
   UM_Example           = USERMOD_ID_EXAMPLE,            // 0x02 // Usermod "usermod_v2_example.h"
@@ -74,8 +75,8 @@ class PinManagerClass {
   PinOwner ownerTag[WLED_NUM_PINS] = { PinOwner::None };
   PinOwner ownerConflict[WLED_NUM_PINS] = { PinOwner::None }; // WLEDMM: record pin alloc conflicts
   #else
-  #define WLED_NUM_PINS 50
-  uint8_t pinAlloc[7] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; //WLEDMM bugfix - 56bit, 1 bit per pin, we use 50 bits on -S3
+  #define WLED_NUM_PINS 56 // S3 has 49 gpio, P4 has 55 gpio
+  uint8_t pinAlloc[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; //WLEDMM bugfix - 64bit, 1 bit per pin, we use 50 bits on -S3, 55 on -P4
   uint8_t ledcAlloc[2] = {0x00, 0x00}; //16 LEDC channels
   PinOwner ownerTag[WLED_NUM_PINS] = { PinOwner::None }; // new MCU's have up to 50 GPIO
   PinOwner ownerConflict[WLED_NUM_PINS] = { PinOwner::None }; // WLEDMM: record pin alloc conflicts
@@ -124,9 +125,9 @@ class PinManagerClass {
   // will return true for reserved pins
   bool isPinAllocated(byte gpio, PinOwner tag = PinOwner::None);
   // will return false for reserved pins
-  bool isPinOk(byte gpio, bool output = true);
+  bool isPinOk(byte gpio, bool output = true) const;
 
-  PinOwner getPinOwner(byte gpio);
+  PinOwner getPinOwner(byte gpio) const;
 
   // WLEDMM begin
   String getOwnerText(PinOwner tag); // WLEDMM  - return PIN owner tag as text

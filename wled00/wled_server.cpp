@@ -58,6 +58,7 @@ void handleUpload(AsyncWebServerRequest *request, const String& filename, size_t
     request->_tempFile.close();
     USER_PRINT(F("File uploaded: "));  // WLEDMM
     USER_PRINTLN(filename);            // WLEDMM
+    invalidateFileNameCache();         // WLEDMM
     if (filename.equalsIgnoreCase("/cfg.json") || filename.equalsIgnoreCase("cfg.json")) { // WLEDMM
       request->send(200, "text/plain", F("Configuration restore successful.\nRebooting..."));
       doReboot = true;
@@ -220,6 +221,8 @@ void initServer()
 
     if (verboseResponse) {
       if (!isConfig) {
+        lastInterfaceUpdate = millis(); // prevent WS update until cooldown
+        interfaceUpdateCallMode = CALL_MODE_WS_SEND; // schedule WS update
         serveJson(request); return; //if JSON contains "v"
       } else {
         doSerializeConfig = true; //serializeConfig(); //Save new settings to FS
@@ -326,7 +329,20 @@ void initServer()
       return;
     }
     if (Update.hasError() || otaLock) {
+#ifdef ARDUINO_ARCH_ESP32
+      if (Update.hasError()) {
+        #if defined(WLEDMM_SAVE_FLASH) 
+          // not requesting the error string reduces flash size by 200 bytes
+          String updErr = Update.getError() == UPDATE_ERROR_ACTIVATE ? String("Could Not Activate The Firmware. (wrong board type?)") : String("Error ") + String(Update.getError());
+        #else
+          String updErr = Update.getError() == UPDATE_ERROR_ACTIVATE ? String("Could Not Activate The Firmware. (wrong board type?)") : String(Update.errorString());
+        #endif
+        serveMessage(request, 500, F("Update failed!"), updErr + String("<br>Please check your file and retry!"), 254);
+      } else
+        serveMessage(request, 500, F("Update failed!"), F("Please check your file and retry! (OTA may be locked)"), 254);
+#else
       serveMessage(request, 500, F("Update failed!"), F("Please check your file and retry!"), 254);
+#endif
     } else {
       serveMessage(request, 200, F("Update successful!"), F("Rebooting..."), 131);
       doReboot = true;
@@ -427,7 +443,13 @@ void initServer()
     if(espalexa.handleAlexaApiCall(request)) return;
     #endif
     if(handleFileRead(request, request->url())) return;
+#if defined(WLEDMM_SAVE_FLASH) || !defined(ARDUINO_ARCH_ESP32)
+    // small 404 variant
+    AsyncWebServerResponse *response = request->beginResponse_P(404, "text/html", PAGE_404_mini, PAGE_404_mini_length);
+#else
+    // 404 variant with easter egg
     AsyncWebServerResponse *response = request->beginResponse_P(404, "text/html", PAGE_404, PAGE_404_length);
+#endif
     response->addHeader(FPSTR(s_content_enc),"gzip");
     setStaticContentCacheHeaders(response);
     request->send(response);

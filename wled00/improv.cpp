@@ -50,6 +50,7 @@ void handleImprovPacket() {
   uint8_t rpcCommandType = 0;
   char rpcData[128];
   rpcData[0] = 0;
+  if (!Serial) return; // WLEDMM avoid reading from unconnected USB-CDC
 
   while (!timeout) {
     if (Serial.available() < 1) {
@@ -209,8 +210,9 @@ void sendImprovInfoResponse() {
 
   //Use serverDescription if it has been changed from the default "WLED", else mDNS name
   bool useMdnsName = (strcmp(serverDescription, "WLED") == 0 && strlen(cmDNS) > 0);
-  char vString[32];
-  snprintf_P(vString, sizeof(vString)-1, PSTR("0.14.1-b30.36/%i"),VERSION);
+  char vString[32] = { '\0' };
+  //snprintf_P(vString, sizeof(vString)-1, PSTR("0.14.1-b34.42/%i"),VERSION); // upstream baseline
+  snprintf_P(vString, sizeof(vString)-1, PSTR("14.5.1-dev/%i"),VERSION);      // WLEDMM version
   const char *str[4] = {"WLED", vString, bString, useMdnsName ? cmDNS : serverDescription};
 
   sendImprovRPCResult(ImprovRPCType::Request_Info, 4, str);

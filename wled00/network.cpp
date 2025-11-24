@@ -4,6 +4,8 @@
 
 
 #ifdef WLED_USE_ETHERNET
+#pragma message "Ethernet support enabled"
+
 // The following six pins are neither configurable nor
 // can they be re-assigned through IOMUX / GPIO matrix.
 // See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
@@ -87,7 +89,7 @@ const ethernet_settings ethernetBoards[] = {
 
   // ESP32-ETHERNET-KIT-VE
   {
-    0,                    // eth_address,
+    1,                    // eth_address, WLED-MM: Changed from 0 to 1 based on not working with 0 on same devkit.
     5,                    // eth_power,
     23,                   // eth_mdc,
     18,                   // eth_mdio,
@@ -159,6 +161,12 @@ int getSignalQuality(int rssi)
     return quality;
 }
 
+#if ESP_IDF_VERSION_MAJOR >= 4
+  #define SYSTEM_EVENT_ETH_CONNECTED ARDUINO_EVENT_ETH_CONNECTED
+  #define SYSTEM_EVENT_ETH_DISCONNECTED ARDUINO_EVENT_ETH_DISCONNECTED
+  #define SYSTEM_EVENT_ETH_START ARDUINO_EVENT_ETH_START
+  #define SYSTEM_EVENT_ETH_GOT_IP ARDUINO_EVENT_ETH_GOT_IP
+#endif
 
 //handle Ethernet connection event
 void WiFiEvent(WiFiEvent_t event)
@@ -168,12 +176,21 @@ void WiFiEvent(WiFiEvent_t event)
     case SYSTEM_EVENT_ETH_START:
       DEBUG_PRINTLN(F("ETH Started"));
       break;
+    case SYSTEM_EVENT_ETH_GOT_IP:
+      if (Network.isEthernet()) {
+        if (!apActive) {
+          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Disabling WIFi"));
+          WiFi.disconnect(true);
+        } else {
+          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Leaving AP WiFi active"));
+        }
+      } else {
+        DEBUG_PRINTLN(F("WiFi Connected. No ETH"));
+      }
+      break;
     case SYSTEM_EVENT_ETH_CONNECTED:
       {
       DEBUG_PRINTLN(F("ETH Connected"));
-      if (!apActive) {
-        WiFi.disconnect(true);
-      }
       if (staticIP != (uint32_t)0x00000000 && staticGateway != (uint32_t)0x00000000) {
         ETH.config(staticIP, staticGateway, staticSubnet, IPAddress(8, 8, 8, 8));
       } else {

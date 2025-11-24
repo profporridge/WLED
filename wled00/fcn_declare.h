@@ -50,8 +50,21 @@ bool getJsonValue(const JsonVariant& element, DestType& destination, const Defau
 
 
 //colors.cpp
+#if !defined(ARDUINO_ARCH_ESP32) || !defined(WLEDMM_FASTPATH) || defined(WLEDMM_SAVE_FLASH)  // WLEDMM: color utils moved into colorTools.hpp, so the compiler may inline these functions (faster)
+#if !defined(FASTLED_VERSION) // pull in FastLED if we don't have it yet (we need the CRGB type)
+  #define FASTLED_INTERNAL
+  #include <FastLED.h>
+#endif
 uint32_t __attribute__((const)) color_blend(uint32_t,uint32_t,uint_fast16_t,bool b16=false);  // WLEDMM: added attribute const
-uint32_t  __attribute__((const)) color_add(uint32_t,uint32_t);                                // WLEDMM: added attribute const
+uint32_t __attribute__((const)) color_add(uint32_t,uint32_t, bool fast=false);                // WLEDMM: added attribute const
+uint32_t __attribute__((const)) color_fade(uint32_t c1, uint8_t amount, bool video=false);
+#undef ColorFromPalette // overwrite any existing override
+CRGB __attribute__((hot,const)) ColorFromPaletteWLED(const CRGBPalette16& pal, unsigned index, uint8_t brightness=255, TBlendType blendType=LINEARBLEND);
+#define ColorFromPalette ColorFromPaletteWLED // override fastled function
+#else
+#include "colorTools.hpp"
+#endif
+
 inline uint32_t colorFromRgbw(byte* rgbw) { return uint32_t((byte(rgbw[3]) << 24) | (byte(rgbw[0]) << 16) | (byte(rgbw[1]) << 8) | (byte(rgbw[2]))); }
 void colorHStoRGB(uint16_t hue, byte sat, byte* rgb); //hue, sat to rgb
 void colorKtoRGB(uint16_t kelvin, byte* rgb);
@@ -60,14 +73,21 @@ void colorXYtoRGB(float x, float y, byte* rgb); // only defined if huesync disab
 void colorRGBtoXY(byte* rgb, float* xy); // only defined if huesync disabled TODO
 void colorFromDecOrHexString(byte* rgb, char* in);
 bool colorFromHexString(byte* rgb, const char* in);
-uint32_t colorBalanceFromKelvin(uint16_t kelvin, uint32_t rgb);
+//uint32_t colorBalanceFromKelvin(uint16_t kelvin, uint32_t rgb);                             // WLEDMM function moved into bus_manager.cpp for better optimization
 uint16_t __attribute__((const)) approximateKelvinFromRGB(uint32_t rgb);                       // WLEDMM: added attribute const
 void setRandomColor(byte* rgb);
 uint8_t gamma8_cal(uint8_t b, float gamma);
 void calcGammaTable(float gamma);
-uint8_t __attribute__((pure)) gamma8(uint8_t b);                                              // WLEDMM: added attribute pure
+uint8_t __attribute__((pure)) gamma8_slow(uint8_t b);                                         // WLEDMM: added attribute pure
 uint32_t __attribute__((pure)) gamma32(uint32_t);                                             // WLEDMM: added attribute pure
 uint8_t unGamma8(uint8_t value);                                                              // WLEDMM revert gamma correction
+uint32_t unGamma24(uint32_t c);                                                               // WLEDMM for 24bit color (white left as-is)
+
+// WLEDMM: speedup - inline function for gamma correction
+extern uint8_t gammaTinv[256]; // colors.cpp
+extern uint8_t gammaT[256];    // colors.cpp
+inline uint8_t gamma8(uint8_t value) { return gammaT[value];}           // WLEDMM inlined for speed
+inline uint8_t fast_unGamma8(uint8_t value) { return gammaTinv[value];}
 
 //dmx_output.cpp
 void initDMXOutput();
@@ -92,6 +112,7 @@ bool readObjectFromFileUsingId(const char* file, uint16_t id, JsonDocument* dest
 bool readObjectFromFile(const char* file, const char* key, JsonDocument* dest);
 void updateFSInfo();
 void closeFile();
+void invalidateFileNameCache();   // WLEDMM call when new files were uploaded
 
 //hue.cpp
 void handleHue();
@@ -100,6 +121,19 @@ void onHueError(void* arg, AsyncClient* client, int8_t error);
 void onHueConnect(void* arg, AsyncClient* client);
 void sendHuePoll();
 void onHueData(void* arg, AsyncClient* client, void *data, size_t len);
+
+#include "FX.h" // must be below colors.cpp declarations (potentially due to duplicate declarations of e.g. color_blend)
+
+//image_loader.cpp
+#ifdef WLED_ENABLE_GIF
+bool fileSeekCallback(unsigned long position);
+unsigned long filePositionCallback(void);
+int fileReadCallback(void);
+int fileReadBlockCallback(void * buffer, int numberOfBytes);
+int fileSizeCallback(void);
+byte renderImageToSegment(Segment &seg);
+void endImagePlayback(Segment* seg);
+#endif
 
 //improv.cpp
 enum ImprovRPCType {
@@ -176,7 +210,10 @@ void stateUpdated(byte callMode);
 void updateInterfaces(uint8_t callMode);
 void handleTransitions();
 void handleNightlight();
+
+#if !defined(ARDUINO_ARCH_ESP32) || !defined(WLEDMM_FASTPATH) || defined(WLEDMM_SAVE_FLASH)  // WLEDMM: color utils moved into colorTools.hpp, so comiler can inline calls (up to 12% faster)
 byte __attribute__((pure)) scaledBri(byte in);                     // WLEDMM: added attribute pure
+#endif
 
 #ifdef WLED_ENABLE_LOXONE
 //lx_parser.cpp
@@ -208,6 +245,7 @@ void _overlayAnalogCountdown();
 void _overlayAnalogClock();
 
 //playlist.cpp
+void suspendPlaylist(); // WLEDMM support function for auto playlist usermod
 void shufflePlaylist();
 void unloadPlaylist();
 int16_t loadPlaylist(JsonObject playlistObject, byte presetId = 0);
@@ -237,7 +275,7 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply=tru
 
 //udp.cpp
 void notify(byte callMode, bool followUp=false);
-uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri=255, bool isRGBW=false);
+uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri=255, bool isRGBW=false, uint8_t artnet_outouts=1, uint16_t artnet_leds_per_output=1, uint8_t artnet_fps_limit=1);
 void realtimeLock(uint32_t timeoutMs, byte md = REALTIME_MODE_GENERIC);
 void exitRealtime();
 void handleNotifications();
@@ -246,7 +284,7 @@ void refreshNodeList();
 void sendSysInfoUDP();
 
 //network.cpp
-int getSignalQuality(int rssi);
+int getSignalQuality(int rssi) __attribute__((const));
 void WiFiEvent(WiFiEvent_t event);
 
 //um_manager.cpp
@@ -295,6 +333,7 @@ class Usermod {
     virtual ~Usermod() { if (um_data) delete um_data; }
     virtual void setup() = 0; // pure virtual, has to be overriden
     virtual void loop() = 0;  // pure virtual, has to be overriden
+    virtual void loop2() {}                                                  // WLEDMM called just before effects will be processed
     virtual void handleOverlayDraw() {}                                      // called after all effects have been processed, just before strip.show()
     virtual bool handleButton(uint8_t b) { return false; }                   // button overrides are possible here
     virtual bool getUMData(um_data_t **data) { if (data) *data = nullptr; return false; }; // usermod data exchange [see examples for audio effects]
@@ -321,10 +360,11 @@ class Usermod {
 class UsermodManager {
   private:
     Usermod* ums[WLED_MAX_USERMODS];
-    byte numMods = 0;
+    unsigned numMods = 0;
 
   public:
     void loop();
+    void loop2();   // WLEDMM loop just before drawing effects (presets and everything already handled)
     void handleOverlayDraw();
     bool handleButton(uint8_t b);
     bool getUMData(um_data_t **um_data, uint8_t mod_id = USERMOD_ID_RESERVED); // USERMOD_ID_RESERVED will poll all usermods
@@ -359,22 +399,54 @@ int getNumVal(const String* req, uint16_t pos);
 void parseNumber(const char* str, byte* val, byte minv=0, byte maxv=255);
 bool getVal(JsonVariant elem, byte* val, byte minv=0, byte maxv=255);
 bool updateVal(const char* req, const char* key, byte* val, byte minv=0, byte maxv=255);
+void oappendUseDeflate(bool OnOff); // enable / disable string squeezing
 bool oappend(const char* txt); // append new c string to temp buffer efficiently
 bool oappendi(int i);          // append new number to temp buffer efficiently
 void sappend(char stype, const char* key, int val);
 void sappends(char stype, const char* key, char* val);
 void prepareHostname(char* hostname);
-bool isAsterisksOnly(const char* str, byte maxLen);
+bool isAsterisksOnly(const char* str, byte maxLen)  __attribute__((pure));
 bool requestJSONBufferLock(uint8_t module=255);
 void releaseJSONBufferLock();
 uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLen);
 uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxLen, uint8_t *var = nullptr);
 int16_t extractModeDefaults(uint8_t mode, const char *segVar);
+void checkSettingsPIN(const char *pin);
 uint16_t  __attribute__((pure)) crc16(const unsigned char* data_p, size_t length);   // WLEDMM: added attribute pure
+String computeSHA1(const String& input);
+String getDeviceId();
+uint16_t beatsin88_t(accum88 beats_per_minute_88, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
+uint16_t beatsin16_t(accum88 beats_per_minute, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
+uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest = 0, uint8_t highest = 255, uint32_t timebase = 0, uint8_t phase_offset = 0);
+
 um_data_t* simulateSound(uint8_t simulationId);
 // WLEDMM enumerateLedmaps(); moved to FX.h
+uint8_t get_random_wheel_index(uint8_t pos);
 CRGB getCRGBForBand(int x, uint8_t *fftResult, int pal); //WLEDMM netmindz ar palette
 char *cleanUpName(char *in); // to clean up a name that was read from file
+
+// fast (true) random numbers using hardware RNG, all functions return values in the range lowerlimit to upperlimit-1
+// note: for true random numbers with high entropy, do not call faster than every 200ns (5MHz)
+// tests show it is still highly random reading it quickly in a loop (better than fastled PRNG)
+// for 8bit and 16bit random functions: no limit check is done for best speed
+// 32bit inputs are used for speed and code size, limits don't work if inverted or out of range
+// inlining does save code size except for random(a,b) and 32bit random with limits
+#ifdef ESP8266
+#define HW_RND_REGISTER RANDOM_REG32
+#else // ESP32 family
+#include "soc/wdev_reg.h"
+#define HW_RND_REGISTER REG_READ(WDEV_RND_REG)
+#endif
+#define random hw_random // replace arduino random()
+inline uint32_t hw_random() { return HW_RND_REGISTER; };
+uint32_t hw_random(uint32_t upperlimit); // not inlined for code size
+int32_t hw_random(int32_t lowerlimit, int32_t upperlimit);
+inline uint16_t hw_random16() { return HW_RND_REGISTER; };
+inline uint16_t hw_random16(uint32_t upperlimit) { return (hw_random16() * upperlimit) >> 16; }; // input range 0-65535 (uint16_t)
+inline int16_t hw_random16(int32_t lowerlimit, int32_t upperlimit) { int32_t range = upperlimit - lowerlimit; return lowerlimit + hw_random16(range); }; // signed limits, use int16_t ranges
+inline uint8_t hw_random8() { return HW_RND_REGISTER; };
+inline uint8_t hw_random8(uint32_t upperlimit) { return (hw_random8() * upperlimit) >> 8; }; // input range 0-255
+inline uint8_t hw_random8(uint32_t lowerlimit, uint32_t upperlimit) { uint32_t range = upperlimit - lowerlimit; return lowerlimit + hw_random8(range); }; // input range 0-255
 
 // RAII guard class for the JSON Buffer lock
 // Modeled after std::lock_guard
@@ -401,26 +473,43 @@ void clearEEPROM();
 #endif
 
 //wled_math.cpp
-#ifndef WLED_USE_REAL_MATH
-  template <typename T> T atan_t(T x);
-  float cos_t(float phi);
-  float sin_t(float x);
-  float tan_t(float x);
-  float acos_t(float x);
-  float asin_t(float x);
-  float floor_t(float x);
-  float fmod_t(float num, float denom);
-#else
-  #include <math.h>   // WLEDMM use "float" variants
-  #define sin_t sinf
-  #define cos_t cosf
-  #define tan_t tanf
-  #define asin_t asinf
-  #define acos_t acosf
-  #define atan_t atanf
-  #define fmod_t fmodf
-  #define floor_t floorf
+//float cos_t(float phi); // use float math
+//float sin_t(float phi);
+//float tan_t(float x);
+int16_t sin16_t(uint16_t theta);
+int16_t cos16_t(uint16_t theta);
+uint8_t sin8_t(uint8_t theta);
+uint8_t cos8_t(uint8_t theta);
+
+float sin_approx(float theta); // uses integer math (converted to float), accuracy +/-0.0015 (compared to sinf())
+float cos_approx(float theta);
+float tan_approx(float x);
+#if defined(WLED_USE_UNREAL_MATH)
+float atan2_t(float y, float x);
+float acos_t(float x);
+float asin_t(float x);
+template <typename T> T atan_t(T x);
+float floor_t(float x);
+float fmod_t(float num, float denom);
 #endif
+#define sin_t sin_approx
+#define cos_t cos_approx
+#define tan_t tan_approx
+
+#if !defined(WLED_USE_UNREAL_MATH)
+#include <math.h>  // standard math functions. use a lot of flash
+#define atan2_t atan2f
+#define asin_t asinf
+#define acos_t acosf
+#define atan_t atanf
+#define fmod_t fmodf
+#define floor_t floorf
+#endif
+/*
+#define sin_t sinf
+#define cos_t cosf
+#define tan_t tanf
+*/
 
 //wled_serial.cpp
 void handleSerial();

@@ -50,6 +50,7 @@ String PinManagerClass::getOwnerText(PinOwner tag) {
     case PinOwner::HW_I2C     : return(F("I2C (hw)")); break;            // 'I2C'  == hardware I2C pins (4&5 on ESP8266, 21&22 on ESP32)
     case PinOwner::HW_SPI     : return(F("SPI (hw)")); break;            // 'SPI'  == hardware (V)SPI pins (13,14&15 on ESP8266, 5,18&23 on ESP32)
     case PinOwner::DMX_INPUT  : return(F("DMX Input")); break;            
+    case PinOwner::HUB75      : return(F("Hub75")); break;          // 'Hub75' == Hub75 driver 
 
     case PinOwner::UM_Audioreactive     : return(F("AudioReactive (UM)")); break;     // audioreactive usermod - analog or digital audio input
     case PinOwner::UM_Temperature       : return(F("Temperature (UM)")); break;       // "usermod_temperature.h"
@@ -112,13 +113,18 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
   #ifdef ARDUINO_ARCH_ESP32
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
       // ESP32-S3
-      if (gpio > 18 && gpio < 21) return (F("USB (CDC) / JTAG"));
-      #if !defined(BOARD_HAS_PSRAM)
-        if (gpio > 32 && gpio < 38)  return (F("(optional) Octal Flash or PSRAM"));
-      #else
+      if (gpio > 18 && gpio < 21) return (F("USB (CDC) or JTAG"));
+      #if CONFIG_ESPTOOLPY_FLASHMODE_OPI || (CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM))
         if (gpio > 32 && gpio < 38)  return (F("(reserved) Octal PSRAM or Octal Flash"));
       #endif
       //if (gpio == 0 || gpio == 3 || gpio == 45 || gpio == 46) return (F("(strapping pin)"));
+      #ifdef ARDUINO_TTGO_T7_S3
+      // experimental: a few special pins of the T7-S3 board
+      if (gpio == 2) return  (F("(reserved) _VBAT voltage monitoring"));
+      if (gpio == 17) return (F("onboard LED"));
+      //if (gpio == 3) return  (F("(cross-connected to pin  3-1)")); // WLEDMM experimental
+      //if (gpio == 12) return (F("(cross-connected to pin 12-1)")); // WLEDMM experimental
+      #endif
 
     #elif defined(CONFIG_IDF_TARGET_ESP32S2)
       // ESP32-S2
@@ -128,7 +134,7 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
 
     #elif defined(CONFIG_IDF_TARGET_ESP32C3)
       // ESP32-C3
-      if (gpio > 17 && gpio < 20) return (F("USB (CDC) / JTAG"));
+      if (gpio > 17 && gpio < 20) return (F("USB (CDC) or JTAG"));
       //if (gpio == 2 || gpio == 8 || gpio == 9) return (F("(strapping pin)"));
 
     #else
@@ -722,19 +728,25 @@ bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
  */
 
 // Check if supplied GPIO is ok to use
-bool PinManagerClass::isPinOk(byte gpio, bool output)
+bool PinManagerClass::isPinOk(byte gpio, bool output) const
 {
 #ifdef ESP32
   if (digitalPinIsValid(gpio)) {
   #if defined(CONFIG_IDF_TARGET_ESP32C3)
     // strapping pins: 2, 8, & 9
     if (gpio > 11 && gpio < 18) return false;     // 11-17 SPI FLASH
+    #if ARDUINO_USB_CDC_ON_BOOT == 1 || ARDUINO_USB_DFU_ON_BOOT == 1
     if (gpio > 17 && gpio < 20) return false;     // 18-19 USB-JTAG
+    #endif
   #elif defined(CONFIG_IDF_TARGET_ESP32S3)
     // 00 to 18 are for general use. Be careful about straping pins GPIO0 and GPIO3 - these may be pulled-up or pulled-down on your board.
+    #if ARDUINO_USB_CDC_ON_BOOT == 1 || ARDUINO_USB_DFU_ON_BOOT == 1
     if (gpio > 18 && gpio < 21) return false;     // 19 + 20 = USB-JTAG. Not recommended for other uses.
+    #endif
     if (gpio > 21 && gpio < 33) return false;     // 22 to 32: not connected + SPI FLASH
-    //if (gpio > 32 && gpio < 38) return false;     // 33 to 37: not available if using _octal_ SPI Flash or _octal_ PSRAM
+    // #if CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM)
+    //   if (gpio > 32 && gpio < 38) return !psramFound(); // 33 to 37: not available if using _octal_ SPI Flash or _octal_ PSRAM
+    // #endif
     // 38 to 48 are for general use. Be careful about straping pins GPIO45 and GPIO46 - these may be pull-up or pulled-down on your board.
   #elif defined(CONFIG_IDF_TARGET_ESP32S2)
     // strapping pins: 0, 45 & 46
@@ -743,7 +755,22 @@ bool PinManagerClass::isPinOk(byte gpio, bool output)
     // JTAG: GPIO39-42 are usually used for inline debugging
     // GPIO46 is input only and pulled down
   #else
-    if (gpio > 5 && gpio < 12) return false;      //SPI flash pins
+    if ((gpio > 5 && gpio < 12) &&   // WLEDMM slightly faster to first check for "potentially reserved pins" and then call ESP.getChipModel()
+        ((strncmp_P(PSTR("ESP32-U4WDH"), ESP.getChipModel(), 11) == 0) ||    // this is the correct identifier, but....
+         (strncmp_P(PSTR("ESP32-PICO-D2"), ESP.getChipModel(), 13) == 0)))   // https://github.com/espressif/arduino-esp32/issues/10683
+    {
+      // this chip has 4 MB of internal Flash and different packaging, so available pins are different!
+      if (((gpio > 5) && (gpio < 9)) || (gpio == 11))
+        return false;
+    } else {
+      // for classic ESP32 (non-mini) modules, these are the SPI flash pins
+      if (gpio > 5 && gpio < 12) return false;      //SPI flash pins
+    }
+    //WLEDMM gpio 16/17 (PSRAM or SPI FLASH) are handled differently
+    // if (((strncmp_P(PSTR("ESP32-PICO"), ESP.getChipModel(), 10) == 0) ||
+    //     (strncmp_P(PSTR("ESP32-U4WDH"), ESP.getChipModel(), 11) == 0))
+    //    && (gpio == 16 || gpio == 17)) return false; // PICO-D4/U4WDH: gpio16+17 are in use for onboard SPI FLASH
+    // if (gpio == 16 || gpio == 17) return !psramFound(); //PSRAM pins on ESP32 (these are IO)
   #endif
     if (output) return digitalPinCanOutput(gpio);
     else        return true;
@@ -756,7 +783,7 @@ bool PinManagerClass::isPinOk(byte gpio, bool output)
   return false;
 }
 
-PinOwner PinManagerClass::getPinOwner(byte gpio) {
+PinOwner PinManagerClass::getPinOwner(byte gpio) const {
   if (gpio >= WLED_NUM_PINS) return PinOwner::None; // catch error case, to avoid array out-of-bounds access
   if (!isPinOk(gpio, false)) return PinOwner::None;
   return ownerTag[gpio];

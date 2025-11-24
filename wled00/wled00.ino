@@ -61,6 +61,11 @@ void esp_heap_trace_free_hook(void* ptr)
 unsigned long lastMillis = 0; //WLEDMM
 unsigned long loopCounter = 0; //WLEDMM
 
+unsigned long lps = 0; // loops per second
+//unsigned long lps2 = 0; // lps without "show"
+//unsigned long long showtime = 0; // time spent in "show" (micros)
+
+void setup() __attribute__((used)); // needed for -flto
 void setup() {
   #ifdef WLED_DEBUG_HEAP
   esp_err_t error = heap_caps_register_failed_alloc_callback(heap_caps_alloc_failed_hook);
@@ -68,14 +73,28 @@ void setup() {
   WLED::instance().setup();
 }
 
+void loop() __attribute__((used)); // needed for -flto
 void loop() {
   //WLEDMM show loops per second
+#if defined(WLED_DEBUG) || defined(WLED_DEBUG_HEAP)
   loopCounter++;
-  if (millis() - lastMillis >= 10000) {
-    //USER_PRINTF("%lu lps\n",loopCounter/10);
+  //if (millis() - lastMillis >= 10000) {
+  if (millis() - lastMillis >= 8000) {
+    long delta = millis() - lastMillis;
+    if ((delta > 0) && (loopCounter > 0)) {
+      lps = (loopCounter*1000U) / delta;
+      //if (delta > (showtime / 1000)) lps2 = (loopCounter*1000U) / (delta - (showtime / 1000));
+      USER_PRINTF("%3lu lps     %5.1fms \t", lps, float(delta) / float(loopCounter));
+      USER_PRINTF("%3u fps\t\t", strip.getFps());
+      //USER_PRINTF("%lu lps without show\t\t", lps2);
+      //USER_PRINTF("target frametime %dms\t", int(strip.getFrameTime()));
+      //USER_PRINTF("target FPS %d", int(strip.getTargetFps()));
+      USER_PRINTLN("");
+    }
     lastMillis = millis();
     loopCounter = 0;
+    //showtime = 0;
   }
-
+#endif
   WLED::instance().loop();
 }

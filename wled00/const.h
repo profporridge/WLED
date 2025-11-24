@@ -91,6 +91,22 @@
   #endif
 #endif
 
+#ifndef WLED_MAX_SEGNAME_LEN
+  #ifdef ESP8266
+    #define WLED_MAX_SEGNAME_LEN 32
+  #else
+    #define WLED_MAX_SEGNAME_LEN 48  // WLEDMM upstream uses 64, but 48 seems to be a good compromise between flexibility and memory needed
+  #endif
+#else
+  #if WLED_MAX_SEGNAME_LEN<32
+    #undef WLED_MAX_SEGNAME_LEN
+    #define WLED_MAX_SEGNAME_LEN 32
+  #else
+    #warning WLED UI does not support your modified maximum segment name length!
+  #endif
+#endif
+
+
 //Usermod IDs
 #define USERMOD_ID_RESERVED               0     //Unused. Might indicate no usermod present
 #define USERMOD_ID_UNSPECIFIED            1     //Default value for a general user mod that does not specify a custom ID
@@ -142,20 +158,24 @@
 #define USERMOD_ID_WEATHER               91     //Usermod "usermod_v2_weather.h"
 #define USERMOD_ID_GAMES                 92     //Usermod "usermod_v2_games.h"
 #define USERMOD_ID_ANIMARTRIX               93     //Usermod "usermod_v2_animartrix.h"
+#define USERMOD_ID_AUTOPLAYLIST          94     // Usermod usermod_v2_auto_playlist.h
 
 //Access point behavior
 #define AP_BEHAVIOR_BOOT_NO_CONN          0     //Open AP when no connection after boot
 #define AP_BEHAVIOR_NO_CONN               1     //Open when no connection (either after boot or if connection is lost)
 #define AP_BEHAVIOR_ALWAYS                2     //Always open
 #define AP_BEHAVIOR_BUTTON_ONLY           3     //Only when button pressed for 6 sec
-
+#define AP_BEHAVIOR_TEMPORARY             4     //Open AP when no connection after boot but only temporary //WLEDMM not yet supported
+#ifndef WLED_AP_TIMEOUT
+  #define WLED_AP_TIMEOUT            300000     //Temporary AP timeout
+#endif
 //Notifier callMode
 #define CALL_MODE_INIT           0     //no updates on init, can be used to disable updates
 #define CALL_MODE_DIRECT_CHANGE  1
 #define CALL_MODE_BUTTON         2     //default button actions applied to selected segments
-#define CALL_MODE_NOTIFICATION   3
-#define CALL_MODE_NIGHTLIGHT     4
-#define CALL_MODE_NO_NOTIFY      5
+#define CALL_MODE_NOTIFICATION   3     //caused by incoming notification (UDP or DMX preset)
+#define CALL_MODE_NIGHTLIGHT     4     //nightlight progress
+#define CALL_MODE_NO_NOTIFY      5     //change state but do not send notifications (UDP)
 #define CALL_MODE_FX_CHANGED     6     //no longer used
 #define CALL_MODE_HUE            7
 #define CALL_MODE_PRESET_CYCLE   8     //no longer used
@@ -243,16 +263,24 @@
 #define TYPE_LPD8806             52
 #define TYPE_P9813               53
 #define TYPE_LPD6803             54
+
+// WLEDMM additional types
+#define TYPE_HUB75MATRIX         100 // 100 - 110
+// WLEDMM caution - do not use bus types > 127
+
 //Network types (master broadcast) (80-95)
 #define TYPE_NET_DDP_RGB         80            //network DDP RGB bus (master broadcast bus)
 #define TYPE_NET_E131_RGB        81            //network E131 RGB bus (master broadcast bus, unused)
-#define TYPE_NET_ARTNET_RGB      82            //network ArtNet RGB bus (master broadcast bus, unused)
+#define TYPE_NET_ARTNET_RGB      82            //network ArtNet RGB bus (master broadcast bus)
+#define TYPE_NET_ARTNET_RGBW     83            //network ArtNet RGB bus (master broadcast bus)
 #define TYPE_NET_DDP_RGBW        88            //network DDP RGBW bus (master broadcast bus)
 
-#define IS_DIGITAL(t) ((t) & 0x10) //digital are 16-31 and 48-63
+#define IS_DIGITAL(t) (((t) & 0x10) || ((t)==TYPE_HUB75MATRIX)) //digital are 16-31 and 48-63 // WLEDMM added HUB75
 #define IS_PWM(t)     ((t) > 40 && (t) < 46)
 #define NUM_PWM_PINS(t) ((t) - 40) //for analog PWM 41-45 only
 #define IS_2PIN(t)      ((t) > 47)
+#define IS_VIRTUAL(t)        ( ((t) <= TYPE_RESERVED) || (((t) >= TYPE_NET_DDP_RGB) && ((t) < (TYPE_NET_DDP_RGB + 16))) ) // WLEDMM 80..95 are network "virtual" busses
+#define EXCLUDE_FROM_ABL(t)  ( IS_VIRTUAL(t) || ( (t) >= (TYPE_HUB75MATRIX) && (t) < (TYPE_HUB75MATRIX + 10)))  // WLEDMM do not apply auto-brightness-limiter on these bus types 
 
 //Color orders
 #define COL_ORDER_GRB             0           //GRB(w),defaut
@@ -263,6 +291,10 @@
 #define COL_ORDER_GBR             5
 #define COL_ORDER_MAX             5
 
+//ESP-NOW  //WLEDMM not yet supported
+#define ESP_NOW_STATE_UNINIT       0
+#define ESP_NOW_STATE_ON           1
+#define ESP_NOW_STATE_ERROR        2
 
 //Button type
 #define BTN_TYPE_NONE             0
@@ -274,6 +306,7 @@
 #define BTN_TYPE_TOUCH            6
 #define BTN_TYPE_ANALOG           7
 #define BTN_TYPE_ANALOG_INVERTED  8
+#define BTN_TYPE_TOUCH_SWITCH     9    //WLEDMM not yet supported
 
 //Ethernet board types
 #define WLED_NUM_ETH_TYPES       12 //WLEDMM +1 for Olimex ESP32-Gateway
@@ -323,6 +356,7 @@
 
 //Playlist option byte
 #define PL_OPTION_SHUFFLE      0x01
+#define PL_OPTION_RESTORE      0x02     //WLEDMM not yet supported
 
 // Segment capability byte
 #define SEG_CAPABILITY_RGB     0x01
@@ -332,8 +366,11 @@
 // WLED Error modes
 #define ERR_NONE         0  // All good :)
 #define ERR_DENIED       1  // Permission denied
-#define ERR_EEP_COMMIT   2  // Could not commit to EEPROM (wrong flash layout?) OBSOLETE
+#define ERR_CONCURRENCY  2  // Conurrency (client active)  //WLEDMM was ERR_EEP_COMMIT (obsolete)
 #define ERR_NOBUF        3  // JSON buffer was not released in time, request cannot be handled at this time
+#define ERR_NOT_IMPL     4  // Not implemented
+#define ERR_NORAM_PX     7  // not enough RAM for pixels
+#define ERR_NORAM        8  // effect RAM depleted
 #define ERR_JSON         9  // JSON parsing failed (input too large?)
 #define ERR_FS_BEGIN    10  // Could not init filesystem (no partition?)
 #define ERR_FS_QUOTA    11  // The FS is full or the maximum file size is reached
@@ -344,7 +381,15 @@
 #define ERR_OVERTEMP    30  // An attached temperature sensor has measured above threshold temperature (not implemented)
 #define ERR_OVERCURRENT 31  // An attached current sensor has measured a current above the threshold (not implemented)
 #define ERR_UNDERVOLT   32  // An attached voltmeter has measured a voltage below the threshold (not implemented)
-#define ERR_LOW_MEM     33  // low memory (RAM)
+#define ERR_LOW_MEM     33  // WLEDMM: low memory (RAM)
+#define ERR_LOW_SEG_MEM 34  // WLEDMM: low memory (segment data RAM)
+#define ERR_LOW_WS_MEM  35  // WLEDMM: low memory (ws)
+#define ERR_LOW_AJAX_MEM  36 // WLEDMM: low memory (oappend)
+#define ERR_LOW_BUF     37  // WLEDMM: low memory (LED buffer from allocLEDs)
+#define ERR_SYS_REBOOT  90  // WLEDMM: reboot after error
+#define ERR_SYS_BROWNOUT  91 // WLEDMM: reboot after brownout alert
+#define ERR_REBOOT_NEEDED 98 // WLEDMM: reboot needed after changing hardware setting
+#define ERR_POWEROFF_NEEDED 99 // WLEDMM: power-cycle needed after changing hardware setting
 
 // Timer mode types
 #define NL_MODE_SET               0            //After nightlight time elapsed, set to target brightness
@@ -378,7 +423,12 @@
 #ifdef ESP8266
 #define MAX_LEDS 1664 //can't rely on memory limit to limit this to 1600 LEDs
 #else
-#define MAX_LEDS 8192
+//#define MAX_LEDS 8192
+#if !defined(CONFIG_IDF_TARGET_ESP32S3)
+  #define MAX_LEDS 8464 // WLEDMM 92x92 for esp32, esp32-S2 and esp32-c3
+#else
+  #define MAX_LEDS 18436 // WLEDMM 128x128 + 2048 + 4 for esp32-S3
+#endif
 #endif
 #endif
 
@@ -395,7 +445,15 @@
 #endif
 
 #ifndef MAX_LEDS_PER_BUS
-#define MAX_LEDS_PER_BUS 2048   // may not be enough for fast LEDs (i.e. APA102)
+#if !defined(ARDUINO_ARCH_ESP32)
+  #define MAX_LEDS_PER_BUS 2048   // may not be enough for fast LEDs (i.e. APA102)
+#else
+  #if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S3
+    #define MAX_LEDS_PER_BUS MAX_LEDS // for fast LEDs and fast MCUs (i.e. APA102, HUB75, ART.Net) - allows to have all LEDs on one bus
+  #else
+    #define MAX_LEDS_PER_BUS 2048     // may not be enough for fast LEDs (i.e. APA102)
+  #endif
+#endif  
 #endif
 
 // string temp buffer (now stored in stack locally) // WLEDMM ...which is actually not the greatest design choice on ESP32
@@ -405,17 +463,23 @@
   #if !defined(USERMOD_AUDIOREACTIVE)
     #define SETTINGS_STACK_BUF_SIZE 3834   // WLEDMM added 696+32 bytes of margin (was 3096)
   #else
-    #define SETTINGS_STACK_BUF_SIZE 4000   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #define SETTINGS_STACK_BUF_SIZE 4000   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_STACK_SIZE=9216' to your build_flags)
   #endif
 #endif
 
-#ifdef WLED_USE_ETHERNET
-  #define E131_MAX_UNIVERSE_COUNT 20
-#else
-  #ifdef ESP8266
-    #define E131_MAX_UNIVERSE_COUNT 9
+#ifndef E131_MAX_UNIVERSE_COUNT
+  #ifdef WLED_USE_ETHERNET
+    #define E131_MAX_UNIVERSE_COUNT 20
   #else
-    #define E131_MAX_UNIVERSE_COUNT 12
+    #ifdef ESP8266
+      #define E131_MAX_UNIVERSE_COUNT 9
+    #else
+      #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)  && !defined(CONFIG_IDF_TARGET_ESP32C6)
+        #define E131_MAX_UNIVERSE_COUNT 112 // WLEDMM enough universes for 128 x 128 pixels, for boards that can handle it
+      #else
+        #define E131_MAX_UNIVERSE_COUNT 12  // WLEDMM use upstream default for S2 and C3
+      #endif
+    #endif
   #endif
 #endif
 
@@ -441,6 +505,7 @@
 #define TOUCH_THRESHOLD 32 // limit to recognize a touch, higher value means more sensitive
 
 // Size of buffer for API JSON object (increase for more segments)
+#if !defined(JSON_BUFFER_SIZE)
 #ifdef ESP8266
   #define JSON_BUFFER_SIZE 10240
 #else
@@ -458,9 +523,29 @@
   #define JSON_BUFFER_SIZE 24576
  #endif
 #endif
+#endif
+
+// Web server limits
+#ifdef ESP8266
+// Minimum heap to consider handling a request
+#define WLED_REQUEST_MIN_HEAP (8*1024)
+// Estimated maximum heap required by any one request
+#define WLED_REQUEST_HEAP_USAGE (6*1024)
+#else
+// ESP32 TCP stack needs much more RAM than ESP8266
+// Minimum heap remaining before queuing a request
+#define WLED_REQUEST_MIN_HEAP (12*1024)
+// Estimated maximum heap required by any one request
+#define WLED_REQUEST_HEAP_USAGE (12*1024)
+#endif
+// Maximum number of requests in queue; absolute cap on web server resource usage.
+// Websockets do not count against this limit.
+#define WLED_REQUEST_MAX_QUEUE 6
 
 //#define MIN_HEAP_SIZE (8k for AsyncWebServer)
+#if !defined(MIN_HEAP_SIZE)
 #define MIN_HEAP_SIZE 8192
+#endif
 
 // Maximum size of node map (list of other WLED instances)
 #ifdef ESP8266
@@ -491,7 +576,10 @@
   #define DEFAULT_LED_COUNT 30
 #endif
 
-#define INTERFACE_UPDATE_COOLDOWN 2000 //time in ms to wait between websockets, alexa, and MQTT updates
+#define INTERFACE_UPDATE_COOLDOWN 1200 // time in ms to wait between websockets, alexa, and MQTT updates
+
+#define PIN_RETRY_COOLDOWN   3000 // time in ms after an incorrect attempt PIN and OTA pass will be rejected even if correct
+#define PIN_TIMEOUT        900000 // time in ms after which the PIN will be required again, 15 minutes
 
 // HW_PIN_SCL & HW_PIN_SDA are used for information in usermods settings page and usermods themselves
 // which GPIO pins are actually used in a hardware layout (controller board)
@@ -522,8 +610,18 @@
 //         error only in MM, not in upstream... tbd: find out why
 #ifdef ARDUINO_ARCH_ESP32
   #define IRAM_ATTR_YN IRAM_ATTR
+  #define DRAM_ATTR_YN DRAM_ATTR
 #else
   #define IRAM_ATTR_YN
+  #define DRAM_ATTR_YN 
+#endif
+
+#define WLED_O2_ATTR __attribute__((optimize("O2")))
+
+#if !defined(WLEDMM_SAVE_FLASH) // WLEDMM
+#define WLED_O3_ATTR __attribute__((optimize("O3,fast-math")))
+#else
+#define WLED_O3_ATTR WLED_O2_ATTR   // -O3 increases flash size due to loop unrolling
 #endif
 
 #endif

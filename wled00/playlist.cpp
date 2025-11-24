@@ -41,6 +41,12 @@ void shufflePlaylist() {
   DEBUG_PRINTLN(F("Playlist shuffle."));
 }
 
+// WLEDMM supporting function for auto_playlist usermod
+//   prevents the active playlist from progressing (until it gets unloaded)
+static bool playlistSuspended = false;
+void suspendPlaylist() {
+  playlistSuspended = true;
+}
 
 void unloadPlaylist() {
   if (playlistEntries != nullptr) {
@@ -49,6 +55,7 @@ void unloadPlaylist() {
   }
   currentPlaylist = playlistIndex = -1;
   playlistLen = playlistEntryDur = playlistOptions = 0;
+  playlistSuspended = false;  // WLEDMM
   DEBUG_PRINTLN(F("Playlist unloaded."));
 }
 
@@ -61,7 +68,7 @@ int16_t loadPlaylist(JsonObject playlistObj, byte presetId) {
   if (playlistLen == 0) return -1;
   if (playlistLen > 100) playlistLen = 100;
 
-  playlistEntries = new PlaylistEntry[playlistLen];
+  playlistEntries = new(std::nothrow) PlaylistEntry[playlistLen];
   if (playlistEntries == nullptr) return -1;
 
   byte it = 0;
@@ -125,7 +132,12 @@ void handlePlaylist() {
   // if fileDoc is not null JSON buffer is in use so just quit
   if (currentPlaylist < 0 || playlistEntries == nullptr || fileDoc != nullptr) return;
 
-  if (millis() - presetCycledTime > (100*playlistEntryDur)) {
+  if (playlistSuspended) { // WLEDMM
+    if (millis() - presetCycledTime > (100*playlistEntryDur)) presetCycledTime = millis();   // keep updating timer
+    return; // but don't progress to next extry, and don't shuffle
+  }
+
+if (millis() - presetCycledTime > (100 * playlistEntryDur) || doAdvancePlaylist) {
     presetCycledTime = millis();
     if (bri == 0 || nightlightActive) return;
 
@@ -147,6 +159,7 @@ void handlePlaylist() {
     transitionDelayTemp = playlistEntries[playlistIndex].tr * 100;
     playlistEntryDur = playlistEntries[playlistIndex].dur;
     applyPreset(playlistEntries[playlistIndex].preset);
+    doAdvancePlaylist = false;
   }
 }
 

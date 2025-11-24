@@ -27,17 +27,9 @@ Currently ESP8266 is not supported, due to low speed and small RAM of this chip.
 There are however plans to create a lightweight audioreactive for the 8266, with reduced features.
 ## Installation 
 
-### using customised _arduinoFFT_ library for use with this usermod
-Add `-D USERMOD_AUDIOREACTIVE` to your PlatformIO environment `build_flags`, as well as `https://github.com/blazoncek/arduinoFFT.git` to your `lib_deps`.
-If you are not using PlatformIO (which you should) try adding `#define USERMOD_AUDIOREACTIVE` to *my_config.h* and make sure you have _arduinoFFT_ library downloaded and installed.
+### using latest _arduinoFFT_ library
 
-Customised _arduinoFFT_ library for use with this usermod can be found at https://github.com/blazoncek/arduinoFFT.git
-
-### using latest (develop) _arduinoFFT_ library
-Alternatively, you can use the latest arduinoFFT development version.
-ArduinoFFT `develop` library is slightly more accurate, and slightly faster than our customised library, however also needs additional 2kB RAM.
-
-* `build_flags` = `-D USERMOD_AUDIOREACTIVE` `-D UM_AUDIOREACTIVE_USE_NEW_FFT`
+* `build_flags` = `-D USERMOD_AUDIOREACTIVE`
 * `lib_deps`= `https://github.com/kosme/arduinoFFT#develop @ 1.9.2`
 
 ## Configuration
@@ -66,9 +58,10 @@ Other options:
 You can use the following additional flags in your `build_flags`
 * `-D SR_SQUELCH=x`  : Default "squelch" setting (10)
 * `-D SR_GAIN=x`     : Default "gain" setting (60)
+* `-D SR_AGC=x`      : (Only ESP32) Default "AGC (Automatic Gain Control)" setting (0): 0=off, 1=normal, 2=vivid, 3=lazy
 * `-D I2S_USE_RIGHT_CHANNEL`: Use RIGHT instead of LEFT channel (not recommended unless you strictly need this).
-* `-D I2S_USE_16BIT_SAMPLES`: Use 16bit instead of 32bit for internal sample buffers. Reduces sampling quality, but frees some RAM ressources (not recommended unless you absolutely need this).
-* `-D I2S_GRAB_ADC1_COMPLETELY`: Experimental: continuously sample analog ADC microphone. Only effective on ESP32. WARNING this _will_ cause conflicts(lock-up) with any analogRead() call.
+* `-D I2S_USE_16BIT_SAMPLES`: Use 16bit instead of 32bit for internal sample buffers. Reduces sampling quality, but frees some RAM resources (not recommended unless you absolutely need this).
+* `-D I2S_GRAB_ADC1_COMPLETELY`: Experimental: continuously sample analog ADC microphone. Only effective on ESP32. WARNING this *will* cause conflicts(lock-up) with any analogRead() call.
 * `-D MIC_LOGGER`     : (debugging) Logs samples from the microphone to serial USB. Use with serial plotter (Arduino IDE)
 * `-D SR_DEBUG`       : (debugging) Additional error diagnostics and debug info on serial USB.
 

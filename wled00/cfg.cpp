@@ -194,13 +194,16 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       uint16_t freqkHz = elm[F("freq")] | 0;  // will be in kHz for DotStar and Hz for PWM (not yet implemented fully)
       ledType |= refresh << 7; // hack bit 7 to indicate strip requires off refresh
       uint8_t AWmode = elm[F("rgbwm")] | RGBW_MODE_MANUAL_ONLY;
+      uint8_t artnet_outputs = elm["artnet_outputs"] | 1; // sanity check
+      uint16_t artnet_leds_per_output = elm["artnet_leds_per_output"] | length; // sanity check
+      uint8_t artnet_fps_limit = elm["artnet_fps_limit"] | 24; // sanity check
       if (fromFS) {
-        BusConfig bc = BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz);
+        BusConfig bc = BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
         mem += BusManager::memUsage(bc);
         if (mem <= MAX_LED_MEMORY) if (busses.add(bc) == -1) break;  // finalization will be done in WLED::beginStrip()
       } else {
         if (busConfigs[s] != nullptr) delete busConfigs[s];
-        busConfigs[s] = new BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode);
+        busConfigs[s] = new BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
         busesChanged = true;
       }
       s++;
@@ -468,6 +471,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
     CJSON(dmxInputTransmitPin, if_live_dmx[F("inputRxPin")]);
     CJSON(dmxInputReceivePin, if_live_dmx[F("inputTxPin")]);
     CJSON(dmxInputEnablePin, if_live_dmx[F("inputEnablePin")]);
+    CJSON(dmxInputPort, if_live_dmx[F("dmxInputPort")]);
   #endif
 
   CJSON(arlsForceMaxBri, if_live[F("maxbri")]);
@@ -795,7 +799,7 @@ void serializeConfig() {
     matrix["psl"] = strip.panelO.serpentine;
 
     JsonArray panels = matrix.createNestedArray(F("panels"));
-    for (uint8_t i=0; i<strip.panel.size(); i++) {
+    for (size_t i = 0; i < strip.panel.size(); i++) {
       JsonObject pnl = panels.createNestedObject();
       pnl["b"] = strip.panel[i].bottomStart;
       pnl["r"] = strip.panel[i].rightStart;
@@ -828,6 +832,9 @@ void serializeConfig() {
     ins["ref"] = bus->isOffRefreshRequired();
     ins[F("rgbwm")] = bus->getAutoWhiteMode();
     ins[F("freq")] = bus->getFrequency();
+    ins["artnet_outputs"] = bus->get_artnet_outputs();
+    ins["artnet_fps_limit"] = bus->get_artnet_fps_limit();
+    ins["artnet_leds_per_output"] = bus->get_artnet_leds_per_output();
   }
 
   JsonArray hw_com = hw.createNestedArray(F("com"));
@@ -958,6 +965,7 @@ void serializeConfig() {
     if_live_dmx[F("inputRxPin")] = dmxInputTransmitPin;
     if_live_dmx[F("inputTxPin")] = dmxInputReceivePin;
     if_live_dmx[F("inputEnablePin")] = dmxInputEnablePin;
+    if_live_dmx[F("dmxInputPort")] = dmxInputPort;
   #endif
 
   if_live[F("timeout")] = realtimeTimeoutMs / 100;

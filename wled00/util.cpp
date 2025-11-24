@@ -1,7 +1,13 @@
 #include "wled.h"
 #include "fcn_declare.h"
 #include "const.h"
-
+#ifdef ESP8266
+#include "user_interface.h" // for bootloop detection
+#include <Hash.h>            // for SHA1 on ESP8266
+#else
+#include "mbedtls/sha1.h"   // for SHA1 on ESP32
+#include "esp_efuse.h"
+#endif
 
 //helper to get int value at a position in string
 int getNumVal(const String* req, uint16_t pos)
@@ -144,21 +150,34 @@ bool oappendi(int i)
   return oappend(s);
 }
 
+static bool squeezeStrings = false;
+void oappendUseDeflate(bool OnOff) { squeezeStrings = OnOff; }
 
 bool oappend(const char* txt)
 {
-  uint16_t len = strlen(txt);
+  String str = squeezeStrings ? String(txt) : String("");
+  if (squeezeStrings) {
+    // simple fixed-dictionary deflate
+    str.replace(F("addField("),    F("adF("));
+    str.replace(F("addDropdown("), F("adD("));
+    str.replace(F("addOption("),   F("adO("));
+    str.replace(F("addInfo("),     F("adI("));
+  }
+  const char* finalTxt = squeezeStrings ? str.c_str() : txt;
+
+  size_t len = strlen(finalTxt);
   if ((obuf == nullptr) || (olen + len >= SETTINGS_STACK_BUF_SIZE)) { // sanity checks
 	  if (obuf == nullptr) { USER_PRINTLN(F("oappend() error: obuf == nullptr."));
 	  } else {
 	    USER_PRINT(F("oappend() error: buffer full. Increase SETTINGS_STACK_BUF_SIZE for "));
       USER_PRINTF("%2u bytes \t\"", len /*1 + olen + len - SETTINGS_STACK_BUF_SIZE*/);
-      USER_PRINT(txt);
+      USER_PRINT(finalTxt);
       USER_PRINTLN(F("\""));
+      errorFlag = ERR_LOW_AJAX_MEM;
 	  }
     return false;        // buffer full
   }
-  strcpy(obuf + olen, txt);
+  strcpy(obuf + olen, finalTxt);
   olen += len;
   return true;
 }
@@ -204,7 +223,7 @@ bool requestJSONBufferLock(uint8_t module)
 {
   unsigned long now = millis();
 
-  while (jsonBufferLock && millis()-now < 1200) delay(1); // wait for fraction for buffer lock
+  while (jsonBufferLock && millis()-now < 1100) delay(1); // wait for fraction for buffer lock
 
   if (jsonBufferLock) {
     USER_PRINT(F("ERROR: Locking JSON buffer failed! (still locked by "));
@@ -239,9 +258,10 @@ uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLe
 {
   if (src == JSON_mode_names || src == nullptr) {
     if (mode < strip.getModeCount()) {
-      char lineBuffer[256];
+      char lineBuffer[256] = { '\0' };
       //strcpy_P(lineBuffer, (const char*)pgm_read_dword(&(WS2812FX::_modeData[mode])));
-      strcpy_P(lineBuffer, strip.getModeData(mode));
+      strncpy_P(lineBuffer, strip.getModeData(mode), sizeof(lineBuffer)/sizeof(char)-1);
+      lineBuffer[sizeof(lineBuffer)/sizeof(char)-1] = '\0'; // terminate string
       size_t len = strlen(lineBuffer);
       size_t j = 0;
       for (; j < maxLen && j < len; j++) {
@@ -251,6 +271,12 @@ uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLe
       dest[j] = 0; // terminate string
       return strlen(dest);
     } else return 0;
+  }
+
+  if (src == JSON_palette_names && mode > (GRADIENT_PALETTE_COUNT + 13)) {
+    snprintf_P(dest, maxLen, PSTR("~ Custom %d ~"), 255-mode);
+    dest[maxLen-1] = '\0';
+    return strlen(dest);
   }
 
   uint8_t qComma = 0;
@@ -320,10 +346,11 @@ uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxL
                 strncpy_P(dest, tmpstr, maxLen); // copy the name into buffer (replacing previous)
                 dest[maxLen-1] = '\0';
               } else {
-                if (nameEnd<0) tmpstr = names.substring(nameBegin).c_str(); // did not find ",", last name?
-                else           tmpstr = names.substring(nameBegin, nameEnd).c_str();
-                strlcpy(dest, tmpstr, maxLen); // copy the name into buffer (replacing previous)
-              }
+                // WLEDMM bugfix for WLED-MM #272
+                // names.substring(...).c_str() returns a pointer to a temporary; it’s invalid by the next statement. Added result buffer "sub" to avoid use-after-free
+                String sub = (nameEnd<0) ? names.substring(nameBegin) : names.substring(nameBegin, nameEnd); // special handling in case we did not find "," (last name)
+                strlcpy(dest, sub.c_str(), maxLen); // copy the name into buffer (replacing previous)
+			  }
             }
             nameBegin = nameEnd+1; // next name (if "," is not found it will be 0)
           } // next slider
@@ -363,9 +390,9 @@ uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxL
 int16_t extractModeDefaults(uint8_t mode, const char *segVar)
 {
   if (mode < strip.getModeCount()) {
-    char lineBuffer[128] = "";
-    strncpy_P(lineBuffer, strip.getModeData(mode), 127);
-    lineBuffer[127] = '\0'; // terminate string
+    char lineBuffer[256] = { '\0' };
+    strncpy_P(lineBuffer, strip.getModeData(mode), sizeof(lineBuffer)/sizeof(char)-1);
+    lineBuffer[sizeof(lineBuffer)/sizeof(char)-1] = '\0'; // terminate string
     if (lineBuffer[0] != 0) {
       char* startPtr = strrchr(lineBuffer, ';'); // last ";" in FX data
       if (!startPtr) return -1;
@@ -381,6 +408,16 @@ int16_t extractModeDefaults(uint8_t mode, const char *segVar)
 }
 
 
+void checkSettingsPIN(const char* pin) {
+  if (!pin) return;
+  if (!correctPIN && millis() - lastEditTime < PIN_RETRY_COOLDOWN) return; // guard against PIN brute force
+  bool correctBefore = correctPIN;
+  correctPIN = (strlen(settingsPIN) == 0 || strncmp(settingsPIN, pin, 4) == 0);
+  if (correctBefore != correctPIN) createEditHandler(correctPIN);
+  lastEditTime = millis();
+}
+
+
 uint16_t crc16(const unsigned char* data_p, size_t length) {
   uint8_t x;
   uint16_t crc = 0xFFFF;
@@ -393,6 +430,39 @@ uint16_t crc16(const unsigned char* data_p, size_t length) {
   return crc;
 }
 
+// fastled beatsin: 1:1 replacements to remove the use of fastled sin16()
+// Generates a 16-bit sine wave at a given BPM that oscillates within a given range. see fastled for details.
+uint16_t beatsin88_t(accum88 beats_per_minute_88, uint16_t lowest, uint16_t highest, uint32_t timebase, uint16_t phase_offset)
+{
+    uint16_t beat = beat88( beats_per_minute_88, timebase);
+    uint16_t beatsin (sin16_t( beat + phase_offset) + 32768);
+    uint16_t rangewidth = highest - lowest;
+    uint16_t scaledbeat = scale16( beatsin, rangewidth);
+    uint16_t result = lowest + scaledbeat;
+    return result;
+}
+
+// Generates a 16-bit sine wave at a given BPM that oscillates within a given range. see fastled for details.
+uint16_t beatsin16_t(accum88 beats_per_minute, uint16_t lowest, uint16_t highest, uint32_t timebase, uint16_t phase_offset)
+{
+    uint16_t beat = beat16( beats_per_minute, timebase);
+    uint16_t beatsin = (sin16_t( beat + phase_offset) + 32768);
+    uint16_t rangewidth = highest - lowest;
+    uint16_t scaledbeat = scale16( beatsin, rangewidth);
+    uint16_t result = lowest + scaledbeat;
+    return result;
+}
+
+// Generates an 8-bit sine wave at a given BPM that oscillates within a given range. see fastled for details.
+uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest, uint8_t highest, uint32_t timebase, uint8_t phase_offset)
+{
+    uint8_t beat = beat8( beats_per_minute, timebase);
+    uint8_t beatsin = sin8_t( beat + phase_offset);
+    uint8_t rangewidth = highest - lowest;
+    uint8_t scaledbeat = scale8( beatsin, rangewidth);
+    uint8_t result = lowest + scaledbeat;
+    return result;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Begin simulateSound (to enable audio enhanced effects to display something)
@@ -401,9 +471,9 @@ uint16_t crc16(const unsigned char* data_p, size_t length) {
 // (only 2 used as stored in 1 bit in segment options, consider switching to a single global simulation type)
 typedef enum UM_SoundSimulations {
   UMS_BeatSin = 0,
-  UMS_WeWillRockYou
-  //UMS_10_13,
-  //UMS_14_3
+  UMS_WeWillRockYou,
+  UMS_10_13,
+  UMS_14_3
 } um_soundSimulations_t;
 
 um_data_t* simulateSound(uint8_t simulationId)
@@ -416,6 +486,7 @@ um_data_t* simulateSound(uint8_t simulationId)
   static float    volumeSmth;
   static uint16_t volumeRaw;
   static float    my_magnitude;
+  static uint16_t zeroCrossingCount = 0; // number of zero crossings in the current batch of 512 samples
 
   //arrays
   uint8_t *fftResult;
@@ -430,7 +501,7 @@ um_data_t* simulateSound(uint8_t simulationId)
     // NOTE!!!
     // This may change as AudioReactive usermod may change
     um_data = new um_data_t;
-    um_data->u_size = 11;
+    um_data->u_size = 12;
     um_data->u_type = new um_types_t[um_data->u_size];
     um_data->u_data = new void*[um_data->u_size];
     um_data->u_data[0] = &volumeSmth;
@@ -444,6 +515,7 @@ um_data_t* simulateSound(uint8_t simulationId)
     um_data->u_data[8]  = &FFT_MajorPeak; // dummy (FFT Peak smoothed)
     um_data->u_data[9]  = &volumeSmth;    // dummy (soundPressure)
     um_data->u_data[10] = &volumeSmth;    // dummy (agcSensitivity)
+    um_data->u_data[11] = &zeroCrossingCount;
   } else {
     // get arrays from um_data
     fftResult =  (uint8_t*)um_data->u_data[2];
@@ -455,8 +527,8 @@ um_data_t* simulateSound(uint8_t simulationId)
     default:
     case UMS_BeatSin:
       for (int i = 0; i<16; i++)
-        fftResult[i] = beatsin8(120 / (i+1), 0, 255);
-        // fftResult[i] = (beatsin8(120, 0, 255) + (256/16 * i)) % 256;
+        fftResult[i] = beatsin8_t(120 / (i+1), 0, 255);
+        // fftResult[i] = (beatsin8_t(120, 0, 255) + (256/16 * i)) % 256;
         volumeSmth = fftResult[8];
       break;
     case UMS_WeWillRockYou:
@@ -491,25 +563,26 @@ um_data_t* simulateSound(uint8_t simulationId)
           fftResult[i] = 0;
       }
       break;
-  /*case UMS_10_3:
+    case UMS_10_13:
       for (int i = 0; i<16; i++)
-        fftResult[i] = inoise8(beatsin8(90 / (i+1), 0, 200)*15 + (ms>>10), ms>>3);
+        fftResult[i] = inoise8(beatsin8_t(90 / (i+1), 0, 200)*15 + (ms>>10), ms>>3);
         volumeSmth = fftResult[8];
       break;
     case UMS_14_3:
       for (int i = 0; i<16; i++)
-        fftResult[i] = inoise8(beatsin8(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
+        fftResult[i] = inoise8(beatsin8_t(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
       volumeSmth = fftResult[8];
-      break;*/
+      break;
   }
 
   samplePeak    = random8() > 250;
-  FFT_MajorPeak = 21 + (volumeSmth*volumeSmth) / 8.0f; // WLEDMM 21hz...8200hz
+  FFT_MajorPeak = 21 + (volumeSmth*volumeSmth) / 8.0f; // walk thru full range of 21hz...8200hz
   maxVol        = 31;  // this gets feedback fro UI
   binNum        = 8;   // this gets feedback fro UI
   volumeRaw = volumeSmth;
   my_magnitude = 10000.0f / 8.0f; //no idea if 10000 is a good value for FFT_Magnitude ???
   if (volumeSmth < 1 ) my_magnitude = 0.001f;             // noise gate closed - mute
+  zeroCrossingCount = floorf(FFT_MajorPeak / 36.0f); // 9Khz max frequency => 255 zero crossings
 
   return um_data;
 }
@@ -545,6 +618,20 @@ CRGB getCRGBForBand(int x, uint8_t *fftResult, int pal) {
   return value;
 }
 
+/*
+ * Returns a new, random color wheel index with a minimum distance of 42 from pos.
+ */
+uint8_t get_random_wheel_index(uint8_t pos) {
+  uint8_t r = 0, x = 0, y = 0, d = 0;
+  while (d < 42) {
+    r = random8();
+    x = abs(pos - r);
+    y = 255 - x;
+    d = MIN(x, y);
+  }
+  return r;
+}
+
 // WLEDMM extended "trim string" function to support enumerateLedmaps
 // The function takes char* as input, and removes all leading and trailing "decorations" like spaces, tabs, line endings, quotes, colons
 // The conversion is "in place" (destructive).
@@ -572,4 +659,110 @@ char *cleanUpName(char *in) {
   }
   
   return(in);
+}
+
+// 32 bit hardware random number generator, inlining uses more code, use hw_random16() if speed is critical (see fcn_declare.h)
+uint32_t hw_random(uint32_t upperlimit) {
+  uint32_t rnd = hw_random();
+  uint64_t scaled = uint64_t(rnd) * uint64_t(upperlimit);
+  return scaled >> 32;
+}
+
+int32_t hw_random(int32_t lowerlimit, int32_t upperlimit) {
+  if(lowerlimit >= upperlimit) {
+    return lowerlimit;
+  }
+  uint32_t diff = upperlimit - lowerlimit;
+  return hw_random(diff) + lowerlimit;
+}
+
+// Platform-agnostic SHA1 computation from String input
+String computeSHA1(const String& input) {
+  #ifdef ESP8266
+    return sha1(input); // ESP8266 has built-in sha1() function
+  #else
+    // ESP32: Compute SHA1 hash using mbedtls
+    unsigned char shaResult[20]; // SHA1 produces 20 bytes
+    mbedtls_sha1_context ctx;
+
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts_ret(&ctx);
+    mbedtls_sha1_update_ret(&ctx, (const unsigned char*)input.c_str(), input.length());
+    mbedtls_sha1_finish_ret(&ctx, shaResult);
+    mbedtls_sha1_free(&ctx);
+
+    // Convert to hexadecimal string
+    char hexString[41];
+    for (int i = 0; i < 20; i++) {
+      sprintf(&hexString[i*2], "%02x", shaResult[i]);
+    }
+    hexString[40] = '\0';
+
+    return String(hexString);
+  #endif
+}
+
+#ifdef ESP32
+static String dump_raw_block(esp_efuse_block_t block)
+{
+  const int WORDS = 8; // ESP32: 8×32-bit words per block i.e. 256bits
+  uint32_t buf[WORDS] = {0};
+
+  const esp_efuse_desc_t d = {
+    .efuse_block = block,
+    .bit_start = 0,
+    .bit_count = WORDS * 32
+  };
+  const esp_efuse_desc_t* field[2] = { &d, NULL };
+
+  esp_err_t err = esp_efuse_read_field_blob(field, buf, WORDS * 32);
+  if (err != ESP_OK) {
+    return "";
+  }
+
+  String result = "";
+  for (const unsigned int i : buf) {
+    char line[32];
+    sprintf(line, "0x%08X", i);
+    result += line;
+  }
+  return result;
+}
+#endif
+
+
+// Generate a device ID based on SHA1 hash of MAC address salted with "WLED"
+// Returns: original SHA1 + last 2 chars of double-hashed SHA1 (42 chars total)
+String getDeviceId() {
+  static String cachedDeviceId = "";
+  if (cachedDeviceId.length() > 0) return cachedDeviceId;
+
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char macStr[18];
+  sprintf(macStr, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+  // The device string is deterministic as it needs to be consistent for the same device, even after a full flash erase
+  // MAC is salted with other consistent device info to avoid rainbow table attacks.
+  // If the MAC address is known by malicious actors, they could precompute SHA1 hashes to impersonate devices,
+  // but as WLED developers are just looking at statistics and not authenticating devices, this is acceptable.
+  // If the usage data was exfiltrated, you could not easily determine the MAC from the device ID without brute forcing SHA1
+#ifdef ESP8266
+  String deviceString = String(macStr) + "WLED" + ESP.getFlashChipId();
+#else
+  String deviceString = String(macStr) + "WLED" + ESP.getChipModel() + ESP.getChipRevision();
+  deviceString += dump_raw_block(EFUSE_BLK0);
+  deviceString += dump_raw_block(EFUSE_BLK1);
+  deviceString += dump_raw_block(EFUSE_BLK2);
+  deviceString += dump_raw_block(EFUSE_BLK3);
+#endif
+  String firstHash = computeSHA1(deviceString);
+
+  // Second hash: SHA1 of the first hash
+  String secondHash = computeSHA1(firstHash);
+
+  // Concatenate first hash + last 2 chars of second hash
+  cachedDeviceId = firstHash + secondHash.substring(38);
+
+  return cachedDeviceId;
 }

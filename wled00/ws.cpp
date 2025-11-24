@@ -9,10 +9,18 @@ static volatile uint16_t wsLiveClientId = 0;        // WLEDMM added "static"
 static volatile unsigned long wsLastLiveTime = 0;   // WLEDMM
 //uint8_t* wsFrameBuffer = nullptr;
 
+// define some constants for binary protocols, dont use defines but C++ style constexpr
+constexpr uint8_t BINARY_PROTOCOL_GENERIC = 0xFF; // generic / auto detect NOT IMPLEMENTED
+constexpr uint8_t BINARY_PROTOCOL_E131    = P_E131; // = 0, untested!
+constexpr uint8_t BINARY_PROTOCOL_ARTNET  = P_ARTNET; // = 1, untested!
+constexpr uint8_t BINARY_PROTOCOL_DDP     = P_DDP; // = 2
+
 #if !defined(ARDUINO_ARCH_ESP32) || defined(WLEDMM_FASTPATH)   // WLEDMM
-#define WS_LIVE_INTERVAL 120
+#define WS_LIVE_INTERVAL_MAX 120
+#define WS_LIVE_INTERVAL_MIN 25
 #else
-#define WS_LIVE_INTERVAL 80
+#define WS_LIVE_INTERVAL_MAX 80
+#define WS_LIVE_INTERVAL_MIN 40
 #endif
 
 void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len)
@@ -30,7 +38,7 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
     // data packet
     AwsFrameInfo * info = (AwsFrameInfo*)arg;
     if(info->final && info->index == 0 && info->len == len){
-      // the whole message is in a single frame and we got all of its data (max. 1450 bytes)
+      // the whole message is in a single frame and we got all of its data (max. 1428 bytes / ESP8266: 528 bytes)
       if(info->opcode == WS_TEXT)
       {
         if (len > 0 && len < 10 && data[0] == 'p') {
@@ -62,17 +70,39 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
         }
         releaseJSONBufferLock(); // will clean fileDoc
 
-        // force broadcast in 500ms after updating client
-        if (verboseResponse) {
-          sendDataWs(client);
-          lastInterfaceUpdate = millis() - (INTERFACE_UPDATE_COOLDOWN -500);
-        } else {
-          // we have to send something back otherwise WS connection closes
-          client->text(F("{\"success\":true}"));
-          lastInterfaceUpdate = millis() - (INTERFACE_UPDATE_COOLDOWN -500);
+        if (!interfaceUpdateCallMode) { // individual client response only needed if no WS broadcast soon
+          if (verboseResponse) {
+            sendDataWs(client);
+          } else {
+            // we have to send something back otherwise WS connection closes
+            client->text(F("{\"success\":true}"));
+          }
+          // force broadcast in 500ms after updating client
+          //lastInterfaceUpdate = millis() - (INTERFACE_UPDATE_COOLDOWN -500); // ESP8266 does not like this
+        }
+      } else if (info->opcode == WS_BINARY) {
+        // first byte determines protocol. Note: since e131_packet_t is "packed", the compiler handles alignment issues
+        //DEBUG_PRINTF_P(PSTR("WS binary message: len %u, byte0: %u\n"), len, data[0]);
+        int offset = 1; // offset to skip protocol byte
+        switch (data[0]) {
+          case BINARY_PROTOCOL_E131:
+            handleE131Packet((e131_packet_t*)&data[offset], client->remoteIP(), P_E131);
+            break;
+          case BINARY_PROTOCOL_ARTNET:
+            handleE131Packet((e131_packet_t*)&data[offset], client->remoteIP(), P_ARTNET);
+            break;
+          case BINARY_PROTOCOL_DDP:
+            if (len < 10 + offset) return; // DDP header is 10 bytes (+1 protocol byte)
+            size_t ddpDataLen = (data[8+offset] << 8) | data[9+offset]; // data length in bytes from DDP header
+            uint8_t flags = data[0+offset];
+            if ((flags & DDP_TIMECODE_FLAG) ) ddpDataLen += 4; // timecode flag adds 4 bytes to data length
+            if (len < (10 + offset + ddpDataLen)) return; // not enough data, prevent out of bounds read
+            // could be a valid DDP packet, forward to handler
+            handleE131Packet((e131_packet_t*)&data[offset], client->remoteIP(), P_DDP);
         }
       }
     } else {
+      DEBUG_PRINTF("WS multipart message: final %u index %u len %u total %u\n", info->final, info->index, len, (uint32_t)info->len);
       //message is comprised of multiple frames or the frame is split into multiple packets
       //if(info->index == 0){
         //if (!wsFrameBuffer && len < 4096) wsFrameBuffer = new uint8_t[4096];
@@ -107,7 +137,6 @@ void sendDataWs(AsyncWebSocketClient * client)
 {
   DEBUG_PRINTF("sendDataWs\n");
   if (!ws.count()) return;
-  AsyncWebSocketMessageBuffer * buffer;
 
   if (!requestJSONBufferLock(12)) {
     if (client) {
@@ -137,17 +166,7 @@ void sendDataWs(AsyncWebSocketClient * client)
     // DEBUG_PRINTF("%s min free stack %d\n", pcTaskGetTaskName(NULL), uxTaskGetStackHighWaterMark(NULL)); //WLEDMM
   #endif
   if (len < 1) return; // WLEDMM do not allocate 0 size buffer
-  
-  // WLEDMM use exceptions to catch out-of-memory errors
-  #if __cpp_exceptions
-  try{
-    buffer = ws.makeBuffer(len); // will not allocate correct memory sometimes on ESP8266
-  } catch(...) {
-    buffer = nullptr;
-  }
-  #else
-  buffer = ws.makeBuffer(len); // will not allocate correct memory sometimes on ESP8266
-  #endif
+  AsyncWebSocketBuffer buffer(len);
   #ifdef ESP8266
   size_t heap2 = ESP.getFreeHeap();
   DEBUG_PRINT(F("heap ")); DEBUG_PRINTLN(ESP.getFreeHeap());
@@ -160,23 +179,19 @@ void sendDataWs(AsyncWebSocketClient * client)
     USER_PRINTLN(F("WS buffer allocation failed."));
     ws.closeAll(1013); //code 1013 = temporary overload, try again later
     ws.cleanupClients(0); //disconnect all clients to release memory
-    ws._cleanBuffers();
+    errorFlag = ERR_LOW_WS_MEM;
     return; //out of memory
   }
-
-  buffer->lock();
-  serializeJson(doc, (char *)buffer->get(), len);
+  serializeJson(doc, (char *)buffer.data(), len);
 
   DEBUG_PRINT(F("Sending WS data "));
   if (client) {
-    client->text(buffer);
+    client->text(std::move(buffer));
     DEBUG_PRINTLN(F("to a single client."));
   } else {
-    ws.textAll(buffer);
+    ws.textAll(std::move(buffer));
     DEBUG_PRINTLN(F("to multiple clients."));
   }
-  buffer->unlock();
-  ws._cleanBuffers();
 
   releaseJSONBufferLock();
 }
@@ -184,6 +199,7 @@ void sendDataWs(AsyncWebSocketClient * client)
 // WLEDMM function to recover full-bright pixel (based on code from upstream alt-buffer, which is based on code from NeoPixelBrightnessBus)
 static uint32_t restoreColorLossy(uint32_t c, uint_fast8_t _restaurationBri) {
   if (_restaurationBri == 255) return c;
+  if (_restaurationBri == 0) return 0;
   uint8_t* chan = (uint8_t*) &c;
   for (uint_fast8_t i=0; i<4; i++) {
     uint_fast16_t val = chan[i];
@@ -196,6 +212,12 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
 {
   AsyncWebSocketClient * wsc = ws.client(wsClient);
   if (!wsc || wsc->queueLength() > 0) return false; //only send if queue free
+
+  #ifdef ARDUINO_ARCH_ESP32
+  static unsigned long ws_delay = 0;
+  if ((ws_delay > 0) && (millis() - ws_delay < 6000)) return false; // out of memory -> suspend for 6 seconds 
+  else ws_delay = 0;
+  #endif
 
   #ifdef ESP8266
     constexpr size_t MAX_LIVE_LEDS_WS = 256U;
@@ -224,32 +246,29 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
   #endif
   size_t pos = (strip.isMatrix ? 4 : 2);
   size_t bufSize = pos + (used/n)*3;
-
-  if ((bufSize < 1) || (used < 1)) return(false); // WLEDMM should not happen
-  //AsyncWebSocketMessageBuffer * wsBuf = ws.makeBuffer(bufSize);
-  // WLEDMM protect against exceptions due to low memory 
-  AsyncWebSocketMessageBuffer * wsBuf = nullptr;
-#if __cpp_exceptions
-  try{
-#endif
-    wsBuf = ws.makeBuffer(bufSize);
-#if __cpp_exceptions
-  } catch(...) {
-#else
-  if (wsBuf == nullptr) {    // 8266 does not support exceptions
-#endif
-    wsBuf = nullptr;
-    USER_PRINTLN(F("WS buffer allocation failed."));
-    //ws.closeAll(1013); //code 1013 = temporary overload, try again later
-    //ws.cleanupClients(0); //disconnect all clients to release memory
-    ws._cleanBuffers();
-  }
   
-  if (!wsBuf) return false; //out of memory
-  uint8_t* buffer = wsBuf->get();
-  if (!buffer) return false; //out of memory
+  if ((bufSize < 1) || (used < 1)) return(false); // WLEDMM should not happen
+  AsyncWebSocketBuffer wsBuf(bufSize);
+  if (!wsBuf) {
+    static unsigned long last_err_time = 0;
+    if (millis() - last_err_time > 300) { // WLEDMM limit to 3 messages per second   
+      USER_PRINTF("WS buffer allocation failed (!wsBuf %u bytes).\n", bufSize);
+      last_err_time = millis();
+    }
+	  errorFlag = ERR_LOW_WS_MEM;
+    #ifdef ARDUINO_ARCH_ESP32
+      ws_delay = millis(); // suspend for next 6 seconds
+      USER_PRINTLN("out of memory - live preview suspended for 6 seconds.");
+    #endif
+	  return false; //out of memory
+  }
+  uint8_t* buffer = reinterpret_cast<uint8_t*>(wsBuf.data());
+  if (!buffer) {
+	  USER_PRINTLN(F("WS buffer allocation failed."));
+	  errorFlag = ERR_LOW_WS_MEM;
+	  return false; //out of memory
+  }
 
-  wsBuf->lock();  // protect buffer from being cleaned by another WS instance
   buffer[0] = 'L';
   buffer[1] = 1; //version
   #ifndef WLED_DISABLE_2D
@@ -261,6 +280,7 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
     }
   #endif
 
+  (void) unGamma8(127); // WLEDMM dummy call, just to make sure that gammaTinv is initialized, so we can use fast_unGamma8
   uint8_t stripBrightness = strip.getBrightness();
   for (size_t i = 0; pos < bufSize -2; i += n)
   {
@@ -270,13 +290,15 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
       if ((i/Segment::maxWidth)%(n)) i += Segment::maxWidth * (n-1);
     }
   #endif
-    uint32_t c = restoreColorLossy(strip.getPixelColor(i), stripBrightness); // WLEDMM full bright preview - does _not_ recover ABL reductions
+    //uint32_t c = restoreColorLossy(strip.getPixelColor(i), stripBrightness); // WLEDMM full bright preview - does _not_ recover ABL reductions
+    uint32_t c = strip.getPixelColorRestored(i);
     // WLEDMM begin: preview with color gamma correction
     if (gammaCorrectPreview) {
       uint8_t w = W(c);  // not sure why, but it looks better if using "white" without corrections
-      buffer[pos++] = qadd8(w, unGamma8(R(c))); //R, add white channel to RGB channels as a simple RGBW -> RGB map
-      buffer[pos++] = qadd8(w, unGamma8(G(c))); //G
-      buffer[pos++] = qadd8(w, unGamma8(B(c))); //B
+      if (w>0) c = color_add(c, RGBW32(w, w, w, 0), false); // add white channel to RGB channels - color_add() will prevent over-saturation
+      buffer[pos++] = fast_unGamma8(R(c)); //R
+      buffer[pos++] = fast_unGamma8(G(c)); //G
+      buffer[pos++] = fast_unGamma8(B(c)); //B
     } else {
     // WLEDMM end
       uint8_t w = W(c);  // WLEDMM small optimization
@@ -286,15 +308,13 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
     }
   }
 
-  wsc->binary(wsBuf);
-  wsBuf->unlock();     // un-protect buffer
-  ws._cleanBuffers();  // cleans up if the message is not added to any clients.
+  wsc->binary(std::move(wsBuf));
   return true;
 }
 
 void handleWs()
 {
-  if ((millis() - wsLastLiveTime) > (unsigned long)(max((strip.getLengthTotal()/20), WS_LIVE_INTERVAL))) //WLEDMM dynamic nr of peek frames per second
+  if ((millis() - wsLastLiveTime) > (unsigned long)(max(WS_LIVE_INTERVAL_MIN, min((strip.getLengthTotal()/80), WS_LIVE_INTERVAL_MAX)))) //WLEDMM dynamic nr of peek frames per second
   {
     #ifdef ESP8266
     ws.cleanupClients(3);
@@ -311,4 +331,5 @@ void handleWs()
 #else
 void handleWs() {}
 void sendDataWs(AsyncWebSocketClient * client) {}
+#pragma message "WebSockets disabled - no live preview."
 #endif

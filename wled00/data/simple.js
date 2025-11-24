@@ -509,10 +509,11 @@ function populateInfo(i)
 	if (i.ver.startsWith("0.14.")) vcn = "Hoshi";
 	if (i.ver.includes("-bl")) vcn = "Supāku";
 	if (i.cn) vcn = i.cn;
+	if (i.ver.includes("14.5.")) vcn = "Small Step";
 
 	//WLEDMM: add total heap and total PSRAM, and build number
-	if (i.ver.includes("14.1-")) vcn = "Sitting Ducks"; // easter egg
-	if (i.ver.includes("14.0-mdev")) vcn = "Lupo";
+	//if (i.ver.includes("14.1-")) vcn = "Sitting Ducks"; // easter egg
+	//if (i.ver.includes("14.0-mdev")) vcn = "Lupo";
 	cn += `v${i.ver} &nbsp;<i>"${vcn}"</i><p><em>build ${i.vid}</em></p><table>
 ${urows}
 ${inforow("Build",i.vid)}
@@ -1135,7 +1136,7 @@ function setSegBri(s)
 function setEffect(ind = 0)
 {
 	tglFxDropdown();
-	var obj = {"seg": {"fx": parseInt(ind), "fxdef":true}}; // fxdef sets effect parameters to default values, TODO add client setting
+	var obj = {"seg": {"fx": parseInt(ind), "fxdef":true, "fxdef2":false}}; // fxdef sets effect parameters to default values, TODO add client setting
 	requestJson(obj);
 }
 
@@ -1281,9 +1282,9 @@ function setBalance(b)
 
 var hc = 0;
 setInterval(()=>{if (!isInfo) return; hc+=18; if (hc>300) hc=0; if (hc>200)hc=306; if (hc==144) hc+=36; if (hc==108) hc+=18;
-gId('heart').style.color = `hsl(${hc}, 100%, 50%)`;}, 910);
+gId('heart').style.color = `hsl(${hc}, 100%, 50%)`; gId('heartMM').style.color = `hsl(${hc}, 100%, 50%)`;}, 910);
 
-function openGH() { window.open("https://github.com/Aircoookie/WLED/wiki"); }
+function openGH() { window.open("https://mm.kno.wled.ge/"); }
 
 var cnfr = false;
 function cnfReset()

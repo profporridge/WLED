@@ -27,7 +27,7 @@ var cfg = {
 	theme:{base:"dark", bg:{url:""}, alpha:{bg:0.6,tab:0.8}, color:{bg:""}},
 	comp :{colors:{picker: true, rgb: false, quick: true, hex: false},
           labels:true, pcmbot:false, pid:true, seglen:false, segpwr:false, segexp:true, 
-          css:true, hdays:false, fxdef:true} //WLEDMM segexp true as default
+          css:true, hdays:false, fxdef:true, fxdef2:false} //WLEDMM segexp true as default, fxdef2 added
 };
 var hol = [
 	[0,11,24,4,"https://aircoookie.github.io/xmas.png"], // christmas
@@ -247,6 +247,7 @@ function onLoad()
 
 	selectSlot(0);
 	updateTablinks(0);
+	handleLocationHash();
 	pmtLS = localStorage.getItem('wledPmt');
 
 	// Load initial data
@@ -279,7 +280,6 @@ function updateTablinks(tabI)
 {
 	var tablinks = gEBCN("tablinks");
 	for (var i of tablinks) i.classList.remove('active');
-	if (pcMode) return;
 	tablinks[tabI].classList.add('active');
 }
 
@@ -290,6 +290,21 @@ function openTab(tabI, force = false)
 	_C.classList.toggle('smooth', false);
 	_C.style.setProperty('--i', iSlide);
 	updateTablinks(tabI);
+	switch (tabI) {
+		case 0: window.location.hash = "Colors"; break;
+		case 1: window.location.hash = "Effects"; break;
+		case 2: window.location.hash = "Segments"; break;
+		case 3: window.location.hash = "Presets"; break;
+	}
+}
+
+function handleLocationHash() {
+	switch (window.location.hash) {
+		case "#Colors": openTab(0); break;
+		case "#Effects": openTab(1); break;
+		case "#Segments": openTab(2); break;
+		case "#Presets": openTab(3); break;
+	}
 }
 
 var timeout;
@@ -669,18 +684,23 @@ function populateInfo(i)
 				urows += inforow(k,val);
 		}
 	}
-	var vcn = "Kuuhaku";
-	if (i.ver.startsWith("0.14.")) vcn = "Hoshi";
+	var vcn = "Small Step";  // WLED-MM 14.5.0, release Dec 2024
+//	if (i.ver.startsWith("0.14.")) vcn = "Hoshi";
 //	if (i.ver.includes("-bl")) vcn = "Supāku";
 	if (i.cn) vcn = i.cn;
 
 	//WLEDMM: add total heap and total PSRAM, and build number, add bin name
-	if (i.ver.includes("0.14.0")) vcn = "Lupo";          // check for MM versioning scheme
-	if (i.ver.includes("0.14.0-b15")) vcn = "Sitting Ducks"; // late easter egg
-	if (i.ver.includes("0.14.0-b2")) vcn = "This is the way"; // recently watched The Mandalorian? I have spoken ;-)
-	if (i.ver.includes("0.14.0-b15.22")) vcn = "Lupo";
-	if (i.ver.includes("0.14.1-b3")) vcn = "Fried Chicken";  // final line of "One Vision" by Queen
-	cn += `v${i.ver} &nbsp;<i>"${vcn}"</i><p>(WLEDMM_${i.ver} ${i.rel}.bin)</p><p><em>build ${i.vid}</em></p><table>
+	//if (i.ver.includes("0.14.0")) vcn = "Lupo";          // check for MM versioning scheme
+	//if (i.ver.includes("0.14.0-b15")) vcn = "Sitting Ducks"; // late easter egg
+	//if (i.ver.includes("0.14.0-b2")) vcn = "This is the way"; // recently watched The Mandalorian? I have spoken ;-)
+	//if (i.ver.includes("0.14.0-b15.22")) vcn = "Lupo";
+	//if (i.ver.includes("0.14.1-b")) vcn = "Fried Chicken";  // final line of "One Vision" by Queen
+	if (i.ver.includes("0.14.3-b")) vcn = "Fried Chicken";
+	if (i.ver.includes("14.5.")) vcn = "Small Step";
+	if (i.ver.includes("14.6.")) vcn = "New Light";
+	if (i.ver.includes("14.7.")) vcn = "Next Step";
+
+	cn += `v${i.ver} &nbsp;<i>"${vcn}"</i><p>(WLEDMM ${i.rel}.bin)</p><p><em>build ${i.vid}</em></p><table>
 ${urows}
 ${urows===""?'':'<tr><td colspan=2><hr style="height:1px;border-width:0;color:SeaGreen;background-color:Seagreen"></td></tr>'}
 ${i.opt&0x100?inforow("Net Print ☾","<button class=\"btn btn-xs\" onclick=\"requestJson({'netDebug':"+(i.opt&0x0080?"false":"true")+"});\"><i class=\"icons "+(i.opt&0x0080?"on":"off")+"\">&#xe08f;</i></button>"):''}
@@ -690,24 +710,22 @@ ${inforow("Build",i.vid)}
 ${inforow("Estimated current",pwru)}
 ${inforow("Average FPS",i.leds.fps)}
 ${inforow("Signal strength",i.wifi.signal +"% ("+ i.wifi.rssi, " dBm)")}
+${inforow("MAC address",i.mac)}
 ${inforow("Uptime",getRuntimeStr(i.uptime))}
 <!-- WLEDMM begin--> 
+<tr><td colspan=2><hr style="height:2px;border-width:0;color:SeaGreen;background-color:SeaGreen"></td></tr>
+${inforow("Filesystem",i.fs.u + "/" + i.fs.t + " kB, " +Math.round(i.fs.u*100/i.fs.t) + "%")}
+${theap>0?inforow("Heap ☾",((i.totalheap-i.freeheap)/1000).toFixed(0)+"/"+theap.toFixed(0)+" kB",", "+Math.round((i.totalheap-i.freeheap)/(10*theap))+"%"):inforow("Free heap",heap," kB")}  <!--WLEDMM different for 8266-->
+${i.minfreeheap?inforow("Max used heap ☾",((i.totalheap-i.minfreeheap)/1000).toFixed(0)+" kB",", "+Math.round((i.totalheap-i.minfreeheap)/(10*theap))+"%"):""} 
+${i.psram?inforow("PSRAM ☾",((i.tpram-i.psram)/1024).toFixed(0)+"/"+(i.tpram/1024).toFixed(0)+" kB",", "+((i.tpram-i.psram)*100.0/i.tpram).toFixed(1)+"%"):""} 
+${i.psusedram?inforow("Max used PSRAM ☾",((i.tpram-i.psusedram)/1024).toFixed(0)+" kB",", "+((i.tpram-i.psusedram)*100.0/i.tpram).toFixed(1)+"%"):""} 
+${i.freestack?inforow("Free stack ☾",(i.freestack/1000).toFixed(3)," kB"):""} <!--WLEDMM-->
 <tr><td colspan=2><hr style="height:1px;border-width:0;color:SeaGreen;background-color:SeaGreen"></td></tr>
-${inforow("Filesystem",i.fs.u + "/" + i.fs.t + " kB (" +Math.round(i.fs.u*100/i.fs.t) + "%)")}
-${theap>0?inforow("Heap ☾",((i.totalheap-i.freeheap)/1000).toFixed(0)+"/"+theap.toFixed(0)+" kB"," ("+Math.round((i.totalheap-i.freeheap)/(10*theap))+"%)"):""}
-${i.minfreeheap?inforow("Max used heap ☾",((i.totalheap-i.minfreeheap)/1000).toFixed(1)+" kB"," ("+Math.round((i.totalheap-i.minfreeheap)/(10*theap))+"%)"):""}
-${inforow("Free heap",heap," kB")}
-${i.freestack?inforow("Free stack ☾",(i.freestack/1024).toFixed(3)," kB"):""} <!--WLEDMM-->
-${inforow("Flash Size ☾",flashsize," kB")}  <!--WLEDMM and Athom-->
-${i.tpram?inforow("PSRAM ☾",(i.tpram/1024).toFixed(1)," kB"):""}
-${i.psram?((i.tpram-i.psram)>16383?inforow("Used PSRAM ☾",((i.tpram-i.psram)/1024).toFixed(1)," kB"):inforow("Used PSRAM ☾",(i.tpram-i.psram)," B")):""}
-${i.psusedram?((i.tpram-i.psusedram)>16383?inforow("Max used PSRAM ☾",((i.tpram-i.psusedram)/1024).toFixed(1)," kB"):inforow("Max used PSRAM ☾",(i.tpram-i.psusedram)," B")):""}
-${i.psram?inforow("Free PSRAM",(i.psram/1024).toFixed(1)," kB"):""}
-${inforow("MAC address",i.mac)}
+${i.tpram?inforow("PSRAM " + (i.psrmode?"("+i.psrmode+" mode) ":"") + " ☾",(i.tpram/1024/1024).toFixed(0)," MB"):inforow("NO PSRAM found.", "")}
+${i.e32flash?inforow("Flash mode "+i.e32flashmode+i.e32flashtext + " ☾",i.e32flash+" MB, "+i.e32flashspeed," Mhz"):""}
+${i.e32model?inforow(i.e32model + " ☾",i.e32cores +" core(s),"," "+i.e32speed+" Mhz"):""}
 ${inforow("Environment",i.arch + " " + i.core + " (" + i.lwip + ")")}
 <tr><td colspan=2><hr style="height:1px;border-width:0;color:SeaGreen;background-color:SeaGreen"></td></tr>
-${i.e32model?inforow(i.e32model + " ☾",i.e32cores +" core(s)"," "+i.e32speed+" Mhz"):""}
-${i.e32flash?inforow("Flash "+i.e32flash+"MB"+" mode "+i.e32flashmode+i.e32flashtext + " ☾",i.e32flashspeed," Mhz"):""}
 ${i.e32code?inforow("Last ESP Restart ☾",i.e32code+" "+i.e32text):""}
 ${i.e32core0code?inforow("Core0 rst reason ☾",i.e32core0code, " "+i.e32core0text):""}
 ${i.e32core1code?inforow("Core1 rst reason ☾",i.e32core1code, " "+i.e32core1text):""}
@@ -809,7 +827,7 @@ function populateSegments(s)
 				(cfg.comp.segpwr ? segp : '') +
 				`<div class="segin" id="seg${i}in">`+
 					`<input id="seg${i}fx" value="${inst.fx}" type="hidden"/>` + // <!--WLEDMM-->
-					`<input type="text" class="ptxt" id="seg${i}t" autocomplete="off" maxlength=32 value="${inst.n?inst.n:""}" placeholder="Enter name..."/>`+
+					`<input type="text" class="ptxt" id="seg${i}t" autocomplete="off" maxlength=64 value="${inst.n?inst.n:""}" placeholder="Enter name..."/>`+
 					`<table class="infot segt">`+
 					`<tr>`+
 						`<td>${isMSeg?'Start X':'Start LED'}</td>`+
@@ -1952,6 +1970,21 @@ function readState(s,command=false)
 	if (s.error && s.error != 0) {
 	  var errstr = "";
 	  switch (s.error) {
+		case  1:
+			errstr = "Denied!";
+			break;
+		case  3:
+			errstr = "Buffer locked!";
+			break;
+		case  7:
+			errstr = "No RAM for pixel buffer!";
+			break;
+		case  8:
+			errstr = "Effect RAM depleted!";
+			break;
+		case  9:
+			errstr = "JSON parsing error!";
+			break;
 		case 10:
 		  errstr = "Could not mount filesystem!";
 		  break;
@@ -1964,14 +1997,41 @@ function readState(s,command=false)
 		case 13:
 		  errstr = "Missing ir.json.";
 		  break;
+		case 14:
+		  errstr = "Missing remote.json.";
+		  break;
 		case 19:
 		  errstr = "A filesystem error has occured.";
 		  break;
 		case 33:
-			errstr = "Warning: Low Memory (RAM).";
-			break;
+			errstr = "Low Memory (generic RAM).";
+		  break;
+		case 34:
+			errstr = "Low Memory (effect data).";
+		  break;
+		case 35:
+			errstr = "Low Memory (WS data).";
+		  break;
+		case 36:
+			errstr = "Low Memory (oappend buffer).";
+		  break;
+		case 37:
+			errstr = "no memory for LEDs buffer.";
+		  break;
+		case 90:
+			errstr = "Unexpected Restart. Check serial monitor.";
+		  break;
+		case 91:
+			errstr = "Brownout Restart.";
+		  break;
+		case 98:
+			errstr = "Please reboot WLED to activate changed settings.";
+		  break;
+		case 99:
+			errstr = "Please switch your device off and back on.";
+		  break;
 		}
-	  showToast('Error ' + s.error + ": " + errstr, true);
+	  showToast(((s.error < 33)?'Error ':'Warning ') + s.error + ": " + errstr, (s.error < 35)||(s.error > 90));
 	}
 
 	selectedPal = i.pal;
@@ -2316,7 +2376,7 @@ function makeSeg()
 	});
 	var cn = `<div class="seg lstI expanded">`+
 		`<div class="segin">`+
-			`<input type="text" id="seg${lu}t" autocomplete="off" maxlength=32 value="" placeholder="New segment ${lu}"/>`+
+			`<input class="ptxt show" type="text" id="seg${lu}t" autocomplete="off" maxlength=32 value="" placeholder="New segment ${lu}"/>`+
 			`<table class="segt">`+
 				`<tr>`+
 					`<td width="38%">${isM?'Start X':'Start LED'}</td>`+
@@ -2342,7 +2402,7 @@ function makeSeg()
 
 function resetUtil(off=false)
 {
-	gId('segutil').innerHTML = `<div class="seg btn btn-s${off?' off':''}" style="padding:0;">`
+	gId('segutil').innerHTML = `<div class="seg btn btn-s${off?' off':''}" style="padding:0;margin-bottom:12px;">`
 	+ '<label class="check schkl"><input type="checkbox" id="selall" onchange="selSegAll(this)"><span class="checkmark"></span></label>'
 	+ `<div class="segname" ${off?'':'onclick="makeSeg()"'}><i class="icons btn-icon">&#xe18a;</i>Add segment</div>`
 	+ '<div class="pop hide" onclick="event.stopPropagation();">'
@@ -2815,7 +2875,7 @@ function setFX(ind = null)
 	} else {
 		d.querySelector(`#fxlist input[name="fx"][value="${ind}"]`).checked = true;
 	}
-	var obj = {"seg": {"fx": parseInt(ind), "fxdef": cfg.comp.fxdef}}; // fxdef sets effect parameters to default values
+	var obj = {"seg": {"fx": parseInt(ind), "fxdef": cfg.comp.fxdef, "fxdef2": cfg.comp.fxdef2}}; // fxdef sets effect parameters to default values; WLEDMM fxdef2 only set slider defaults
 	requestJson(obj);
 }
 
@@ -3161,9 +3221,10 @@ setInterval(()=>{
 	if (hc==144) hc+=36;
 	if (hc==108) hc+=18;
 	gId('heart').style.color = `hsl(${hc}, 100%, 50%)`;
+	gId('heartMM').style.color = `hsl(${hc}, 100%, 50%)`;
 }, 910);
 
-function openGH() { window.open("https://github.com/Aircoookie/WLED/wiki"); }
+function openGH() { window.open("https://mm.kno.wled.ge/"); }
 
 var cnfr = false;
 function cnfReset()
@@ -3210,7 +3271,8 @@ function genPresets()
 	var playlistSep = JSON.parse("{}");
 	var playlistDur = JSON.parse("{}");
 	var playlistTrans = JSON.parse("{}");
-	function addToPlaylist(m, id) {
+	var playlistQL = JSON.parse("{}");
+	function addToPlaylist(m, id, ql = undefined) {
 		if (!playlistPS[m]) playlistPS[m] = "";
 		if (!playlistDur[m]) playlistDur[m] = "";
 		if (!playlistTrans[m]) playlistTrans[m] = "";
@@ -3219,7 +3281,9 @@ function genPresets()
 		playlistDur[m] += playlistSep[m] + "100";
 		playlistTrans[m] += playlistSep[m] + "7";
 		playlistSep[m] = ",";
+		if(ql) playlistQL[m] = `${ql}`;
 	}
+	var seq=230; //Playlist start here
 	for (let ef of effects) {
 		if (ef.name.indexOf("RSVD") < 0) {
 			if (Array.isArray(fxdata) && fxdata.length>ef.id) {
@@ -3257,18 +3321,28 @@ function genPresets()
 				}
 				result += `${sep}"${ef.id}":{"n":"${ef.name}","mainseg":0,"seg":[{"id":0,"fx":${ef.id}${defaultString}}]}`;
 				sep = "\n,";
-				addToPlaylist(m, ef.id);
-				addToPlaylist("All", ef.id);
-				if (m.includes("1")) addToPlaylist("All1", ef.id);
-				if (m.includes("2")) addToPlaylist("All2", ef.id);
+				if(m.length <= 3) {
+					addToPlaylist(m, ef.id, m);
+				}
+				else {
+					addToPlaylist(m, ef.id);
+				}
+				addToPlaylist("All", ef.id, "ALL");
+				if(ef.name.startsWith("Y💡")) addToPlaylist("AnimARTrix", ef.id, "AM");
+				if(ef.name.startsWith("PS ")) addToPlaylist("Particle System", ef.id, "PS");
+
+				if (m.includes("1")) addToPlaylist("All 1D", ef.id, "1D");
+				if (m.includes("2")) addToPlaylist("All 2D", ef.id, "2D");
+
+				seq = Math.max(seq, (parseInt(ef.id) + 1));
 			} //fxdata is array
 		} //not RSVD
 	} //all effects
 
-	var seq=230; //Playlist start here
 	// console.log(playlistPS, playlistDur, playlistTrans);
 	for (const m in playlistPS) {
-		let playListString = `\n,"${seq}":{"n":"${m}D Playlist","ql":"${seq}","on":true,"playlist":{"ps":[${playlistPS[m]}],"dur":[${playlistDur[m]}],"transition":[${playlistTrans[m]}],"repeat":0,"end":0,"r":1}}`;
+		if(!playlistQL[m]) playlistQL[m] = seq;
+		let playListString = `\n,"${seq}":{"n":"${m} Playlist","ql":"${playlistQL[m]}","on":true,"playlist":{"ps":[${playlistPS[m]}],"dur":[${playlistDur[m]}],"transition":[${playlistTrans[m]}],"repeat":0,"end":0,"r":1}}`;
 		// console.log(playListString);
 		result += playListString;
 		seq++;
@@ -3581,12 +3655,11 @@ function togglePcMode(fromB = false)
 	if (fromB) {
 		pcModeA = !pcModeA;
 		localStorage.setItem('pcm', pcModeA);
+		openTab(0, true);
 	}
 	pcMode = (wW >= 1024) && pcModeA;
 	if (cpick) cpick.resize(pcMode && wW>1023 && wW<1250 ? 230 : 260); // for tablet in landscape
 	if (!fromB && ((wW < 1024 && lastw < 1024) || (wW >= 1024 && lastw >= 1024))) return; // no change in size and called from size()
-	openTab(0, true);
-	updateTablinks(0);
 	gId('buttonPcm').className = (pcMode) ? "active":"";
 	gId('bot').style.height = (pcMode && !cfg.comp.pcmbot) ? "0":"auto";
 	sCol('--bh', gId('bot').clientHeight + "px");
@@ -3618,6 +3691,7 @@ size();
 _C.style.setProperty('--n', N);
 
 window.addEventListener('resize', size, true);
+window.addEventListener('hashchange', handleLocationHash);
 
 _C.addEventListener('mousedown', lock, false);
 _C.addEventListener('touchstart', lock, false);

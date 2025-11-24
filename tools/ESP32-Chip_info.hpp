@@ -469,7 +469,7 @@ void my_verbose_print_reset_reason(int reason)
 #endif
 
 /* 
- * parts below were created by softhack007, licenced under GPL v3.0
+ * parts below were created by softhack007, licenced under EUPL-1.2
  */
 
 void show_psram_info_part1(void)
@@ -543,6 +543,8 @@ void show_psram_info_part2(void)
 
 void showRealSpeed() {
   //Serial.begin(115200);
+  if (!Serial) return; // Avoid writing to unconnected USB-CDC
+
   Serial.flush();
   Serial.println(F("\n"));
   for(int aa=0; aa<65; aa++) Serial.print("="); Serial.println();
