@@ -44,10 +44,10 @@ void WS2812FX::setUpMatrix() {
       return;
     }
 
-    USER_PRINTF("setUpMatrix %d x %d\n", Segment::maxWidth, Segment::maxHeight);
+    DEBUG_PRINTF("setUpMatrix %d x %d\n", Segment::maxWidth, Segment::maxHeight);
     
     // WLEDMM check if mapping table is necessary (avoiding heap fragmentation)
-#if defined(WLED_ENABLE_HUB75MATRIX)
+//#if defined(WLED_ENABLE_HUB75MATRIX)
     bool needLedMap = (loadedLedmap >0);              // ledmap loaded
     needLedMap |= WLED_FS.exists(F("/2d-gaps.json")); // gapFile found
     needLedMap |= panel.size() > 1;                   // 2D config: more than one panel
@@ -58,15 +58,15 @@ void WS2812FX::setUpMatrix() {
       needLedMap |= p.bottomStart | p.rightStart;        // panel not top left, or not left->light
       needLedMap |= (p.xOffset > 0) || (p.yOffset > 0);  // panel does not start at (0,0)
     }
-#else
-    bool needLedMap = true;                              // always use ledMaps on non-HUB75 builds
-#endif
+//#else
+//    bool needLedMap = true;                              // un-comment to always use ledMaps on non-HUB75 builds
+//#endif
 
     //WLEDMM recreate customMappingTable if more space needed
     if (Segment::maxWidth * Segment::maxHeight > customMappingTableSize) {
       size_t size = max(ledmapMaxSize, size_t(Segment::maxWidth * Segment::maxHeight)); // TroyHacks
       if (!needLedMap) size = 0;                                                        // softhack007
-      USER_PRINTF("setupmatrix customMappingTable alloc %d from %d\n", size, customMappingTableSize);
+      DEBUG_PRINTF("setupmatrix customMappingTable alloc %d from %d\n", size, customMappingTableSize);
       //if (customMappingTable != nullptr) delete[] customMappingTable;
       //customMappingTable = new(std::nothrow) uint16_t[size];
 
@@ -335,7 +335,7 @@ void IRAM_ATTR_YN Segment::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM:
 
   x *= glen_; // expand to physical pixels
   y *= glen_; // expand to physical pixels
-  if (x >= wid_ || y >= hei_) return;  // if pixel would fall out of segment just exit
+  if (unsigned(x) >= wid_ || unsigned(y) >= hei_) return;  // if pixel would fall out of segment just exit
 
   const int grp_ = grouping; // WLEDMM optimization
   for (int j = 0; j < grp_; j++) {   // groupping vertically

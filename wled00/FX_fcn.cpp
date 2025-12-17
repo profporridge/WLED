@@ -61,7 +61,7 @@ static portMUX_TYPE s_wled_strip_mux = portMUX_INITIALIZER_UNLOCKED; // to prote
 void strip_wait_until_idle(String whoCalledMe) {
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_PROTECT_SERVICE)  // WLEDMM experimental 
   if (strip.isServicing() && (strncmp(pcTaskGetTaskName(NULL), "loopTask", 8) != 0)) { // if we are in looptask (arduino loop), its safe to proceed without waiting
-  USER_PRINTLN(whoCalledMe + String(": strip is still drawing effects."));
+  DEBUG_PRINTLN(whoCalledMe + String(": strip is still drawing effects."));
   strip.waitUntilIdle();
   }
 #endif
@@ -115,7 +115,7 @@ void Segment::allocLeds() {
     } // softhack007 clean up buffer
   }
   if ((size > 0) && (!ledsrgb || size > ledsrgbSize)) {    //softhack dont allocate zero bytes
-    USER_PRINTF("allocLeds (%d,%d to %d,%d), %u from %u\n", start, startY, stop, stopY, size, ledsrgb?ledsrgbSize:0);
+    DEBUG_PRINTF("allocLeds (%d,%d to %d,%d), %u from %u\n", start, startY, stop, stopY, size, ledsrgb?ledsrgbSize:0);
     if (ledsrgb) free(ledsrgb);   // we need a bigger buffer, so free the old one first
     ledsrgb = (CRGB*)calloc(size, 1);
     ledsrgbSize = ledsrgb?size:0;
@@ -230,13 +230,22 @@ bool Segment::allocateData(size_t len, bool allowOverdraft) {  // WLEDMM allowOv
   //DEBUG_PRINTF("allocateData(%u) start %d, stop %d, vlen %d\n", len, start, stop, virtualLength());
   deallocateData();
   if (len == 0) return false; // nothing to do
+
+  // limit to MAX_SEGMENT_DATA if there is no PSRAM, otherwise prefer functionality over speed
+  #ifndef BOARD_HAS_PSRAM
   if (Segment::getUsedSegmentData() + len > MAX_SEGMENT_DATA) {
     if (!allowOverdraft || (Segment::getUsedSegmentData() + len > MAX_SEGMENT_OVERDATA)) { // WLEDMM 50% overdraft allowed temporarily
-      //USER_PRINTF("Segment::allocateData: Segment data quota exceeded! used:%u request:%u max:%d\n", Segment::getUsedSegmentData(), len, MAX_SEGMENT_DATA);
+      static unsigned lastMsgTime = 0;
+      if (millis() - lastMsgTime > 5000) {
+        USER_PRINTF("Segment::allocateData: Segment data quota exceeded! used:%u request:%u max:%d\n", Segment::getUsedSegmentData(), len, MAX_SEGMENT_DATA);
+        lastMsgTime = millis();
+      }
       if (len > 0) errorFlag = ERR_LOW_SEG_MEM;  // WLEDMM raise errorflag
       return false; //not enough memory
     }
   }
+  #endif
+
   // do not use SPI RAM on ESP32 since it is slow
   //#if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
   //if (psramFound())
@@ -931,9 +940,9 @@ uint16_t Segment::calc_virtualLength() const {
   }
 #endif
   uint16_t groupLen = groupLength();
-  uint16_t vLength = (length() + groupLen - 1) / groupLen;
-  if (mirror && width() > 1) vLength = (vLength + 1) /2;  // divide by 2 if mirror, leave at least a single LED // WLEDMM bugfix for pseudo 2d strips
-  return vLength;
+  uint16_t virtLength = (length() + groupLen - 1) / groupLen;
+  if (mirror && width() > 1) virtLength = (virtLength + 1) /2;  // divide by 2 if mirror, leave at least a single LED // WLEDMM bugfix for pseudo 2d strips
+  return virtLength;
 }
 
 //WLEDMM used for M12_sBlock
@@ -1570,12 +1579,12 @@ void __attribute__((hot)) Segment::blur(uint8_t blur_amount, bool smear) {
 #endif
   uint8_t keep = smear ? 255 : 255 - blur_amount;
   uint8_t seep = blur_amount >> 1;
-  unsigned vlength = virtualLength();
+  unsigned virtlength = virtualLength();
   uint32_t carryover = BLACK;
   uint32_t lastnew;
   uint32_t last;
   uint32_t curnew = 0;
-  for (unsigned i = 0; i < vlength; i++) {
+  for (unsigned i = 0; i < virtlength; i++) {
     uint32_t cur = getPixelColor(i);
     uint32_t part = color_fade(cur, seep);
     curnew = color_fade(cur, keep);
@@ -1592,7 +1601,7 @@ void __attribute__((hot)) Segment::blur(uint8_t blur_amount, bool smear) {
     last = cur; // save original value for comparison on next iteration
     carryover = part;
   }
-  setPixelColor(int(vlength - 1), curnew);
+  setPixelColor(int(virtlength - 1), curnew);
 }
 
 /*
@@ -1860,13 +1869,13 @@ void WS2812FX::finalizeInit(void)
     // problem: suspendStripService provides interlocking, but there’s a window before service() observes it, 
     //          and ESP32 is dual-core. A critical section closes that window so the pointer swap is atomic across cores.
 #if defined(ARDUINO_ARCH_ESP32)
-    taskENTER_CRITICAL(&s_wled_strip_mux);
+    portENTER_CRITICAL(&s_wled_strip_mux);
 #endif
     free(Segment::_globalLeds);
     Segment::_globalLeds = nullptr;
     purgeSegments(true);   // WLEDMM moved here, because it seems to improve stability.
 #if defined(ARDUINO_ARCH_ESP32)
-    taskEXIT_CRITICAL(&s_wled_strip_mux);
+    portEXIT_CRITICAL(&s_wled_strip_mux);
 #endif
   }
   if (useLedsArray && getLengthTotal()>0) { // WLEDMM avoid malloc(0)
@@ -1903,7 +1912,8 @@ void WS2812FX::waitUntilIdle(void) {
       delay(2);  // Suspending for 1 tick (or more) gives other tasks a chance to run.
       //yield(); // seems to be a no-op on esp32
     } while (isServicing() && (millis() - waitStarted < MAX_IDLE_WAIT_MS));
-    USER_PRINTF("strip.waitUntilIdle(): strip %sidle after %d ms. (task %s with prio=%d)\n", isServicing()?"not ":"", int(millis() - waitStarted), pcTaskGetTaskName(NULL), uxTaskPriorityGet(NULL));
+    DEBUG_PRINTF("strip.waitUntilIdle(): strip %sidle after %d ms. (task %s with prio=%d)\n", isServicing()?"not ":"", int(millis() - waitStarted), pcTaskGetTaskName(NULL), uxTaskPriorityGet(NULL));
+    if (isServicing()) USER_PRINTF("strip.waitUntilIdle(): strip NOT idle after %d ms - overriding access. (task %s with prio=%d)\n", int(millis() - waitStarted), pcTaskGetTaskName(NULL), uxTaskPriorityGet(NULL));
   }
   return;
 #else
