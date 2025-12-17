@@ -27,3 +27,11 @@ compile_commands.json
 /wled00/Release
 /wled00/wled00.ino.cpp
 /wled00/html_*.h
+platformio_BACKUP_447.ini
+platformio_BASE_447.ini
+platformio_LOCAL_447.ini
+platformio_REMOTE_447.ini
+platformio.ini.orig
+wled00/json.cpp.orig
+wled00/wled.cpp.orig
+wled00/wled.h.orig
