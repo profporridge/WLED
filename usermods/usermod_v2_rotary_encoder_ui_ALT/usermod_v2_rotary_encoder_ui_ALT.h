@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wled.h"
+#include <ESP32Encoder.h>
 
 //
 // Inspired by the original v2 usermods
@@ -122,7 +123,7 @@ private:
   int8_t pinA = ENCODER_DT_PIN;       // DT from encoder
   int8_t pinB = ENCODER_CLK_PIN;      // CLK from encoder
   int8_t pinC = ENCODER_SW_PIN;       // SW from encoder
-
+  ESP32Encoder encoder;
   unsigned char select_state = 0;     // 0: brightness, 1: effect, 2: effect speed, ...
 
   uint16_t currentHue1 = 16; // default boot color
@@ -149,6 +150,7 @@ private:
   unsigned char Enc_A;
   unsigned char Enc_B;
   unsigned char Enc_A_prev = 0;
+  long EnconderPreviousValue = 0;
 
   bool currentEffectAndPaletteInitialized = false;
   uint8_t effectCurrentIndex = 0;
@@ -254,6 +256,10 @@ public:
   void changePreset(bool increase) ;
 
   void changeCCT(bool increase);
+
+  uint8_t getCurrentState() {
+    return select_state;
+  }
 
   /*
    * addToJsonInfo() can be used to add custom entries to the /json/info part of the JSON API.
@@ -436,6 +442,11 @@ void RotaryEncoderUIUsermod::setup()
     return;
   }
 
+	// Enable the weak pull up resistors
+	ESP32Encoder::useInternalWeakPullResistors = puType::up;
+  encoder.attachSingleEdge(pinA, pinB);
+  encoder.clearCount();
+  encoder.setFilter(1023);
   #ifndef USERMOD_ROTARY_ENCODER_GPIO
     #define USERMOD_ROTARY_ENCODER_GPIO INPUT_PULLUP
   #endif
@@ -462,6 +473,7 @@ void RotaryEncoderUIUsermod::setup()
   Enc_A = digitalRead(pinA); // Read encoder pins
   Enc_B = digitalRead(pinB);
   Enc_A_prev = Enc_A;
+  EnconderPreviousValue = encoder.getCount();
   USER_PRINTLN(F("Rotary encoder (ALT) setup completed."));   // WLEDMM inform user
 }
 
@@ -577,12 +589,13 @@ void RotaryEncoderUIUsermod::loop()
       if (changedState) select_state = newState;
     }
 
-    Enc_A = digitalRead(pinA); // Read encoder pins
-    Enc_B = digitalRead(pinB);
-    if ((Enc_A) && (!Enc_A_prev))
-    { // A has gone from high to low
-      if (Enc_B == LOW)    //changes to LOW so that then encoder registers a change at the very end of a pulse
-      { // B is high so clockwise
+
+    long countDiff = encoder.getCount() - EnconderPreviousValue;
+    if (countDiff != 0)
+    {
+      if (countDiff > 0)
+      {
+        // clockwise
         switch(select_state) {
           case  0: changeBrightness(true);      break;
           case  1: changeEffectSpeed(true);     break;
@@ -598,7 +611,7 @@ void RotaryEncoderUIUsermod::loop()
           case 11: changeCustom(3,true);        break;
         }
       }
-      else if (Enc_B == HIGH)
+      else 
       { // B is low so counter-clockwise
         switch(select_state) {
           case  0: changeBrightness(false);      break;
@@ -616,7 +629,7 @@ void RotaryEncoderUIUsermod::loop()
         }
       }
     }
-    Enc_A_prev = Enc_A;     // Store value of A for next time
+    EnconderPreviousValue = encoder.getCount()  ;;     // Store value of A for next time
   }
 }
 
