@@ -2,7 +2,11 @@
 
 #include "wled.h"
 #include "battery_defaults.h"
-
+#ifdef TTGO_TDISPLAY_S3
+  #include "esp_adc_cal.h"
+  //#include "driver/adc.h"
+  #define PIN_BAT_VOLT  4  // GPIO36 is ADC1_0 on ESP32-S3, connected to battery voltage divider on TTGO T-Display S3
+#endif
 /*
  * Usermod by Maximilian Mewes
  * Mail: mewes.maximilian@gmx.de
@@ -116,6 +120,15 @@ class UsermodBattery : public Usermod
 
     float readVoltage()
     {
+      #ifdef TTGO_TDISPLAY_S3
+         esp_adc_cal_characteristics_t adc_chars;
+
+        // Get the internal calibration value of the chip
+        esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+        uint32_t raw = analogRead(batteryPin);
+        uint32_t v1 = esp_adc_cal_raw_to_voltage(raw, &adc_chars) * 2; //The partial pressure is one-half
+        return (v1 / 1000.0f);// * voltageMultiplier + calibration;
+      #endif
       #ifdef ARDUINO_ARCH_ESP32
         if ((batteryPin <0) || !pinManager.isPinAnalog(batteryPin)) return(-1.0f);  // WLEDMM avoid reading from invalid pin
         // use calibrated millivolts analogread on esp32 (150 mV ~ 2450 mV default attenuation) and divide by 1000 to get from milliVolts to volts and multiply by voltage multiplier and apply calibration value
